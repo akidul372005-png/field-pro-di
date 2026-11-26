@@ -134,8 +134,10 @@ interface AppContextValue {
   openTeamSection: (subTab: TeamWorkspaceSubTab) => void;
 
   // Team / Area Session (Firebase Auth + Cloud Firestore private workspace — works online & offline)
+  currentUser: User | null;
   teamSession: TeamSession | null;
   firebaseAuthReady: boolean;
+  isProfileLoading: boolean;
   firebaseUserEmail: string | null;
   firebaseUserName: string | null;
   needsFirebaseAreaSetup: boolean;
@@ -322,16 +324,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       window.scrollTo({ top: 0, behavior: 'auto' });
     }
   }, []);
-  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(() => auth.currentUser);
   const [firebaseProfile, setFirebaseProfile] = useState<FirebaseUserProfile | null>(() =>
     getCachedFirebaseProfile()
   );
+  const [isProfileLoading, setIsProfileLoading] = useState(false);
+  const firebaseProfileRef = useRef<FirebaseUserProfile | null>(firebaseProfile);
+  const authSeqRef = useRef(0);
   const [firebaseSyncError, setFirebaseSyncError] = useState<string | null>(null);
   const [firebaseDoctors, setFirebaseDoctors] = useState<Doctor[]>([]);
   const [firebaseChambers, setFirebaseChambers] = useState<Chamber[]>([]);
   const [firebaseHospitals, setFirebaseHospitals] = useState<Hospital[]>([]);
   const [firebaseMembers, setFirebaseMembers] = useState<MPOUser[]>([]);
   const [areaNotes, setAreaNotes] = useState<AreaNote[]>([]);
+
+  useEffect(() => {
+    firebaseProfileRef.current = firebaseProfile;
+  }, [firebaseProfile]);
 
   const [teamSession, setTeamSession] = useState<TeamSession | null>(() => {
     const cachedProfile = getCachedFirebaseProfile();
@@ -505,27 +514,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     void testFirestoreConnection();
   }, []);
 
-  // Firebase Auth listener + Google redirect completion — keeps Team users signed in offline automatically
+  // Firebase Auth listener + Google redirect completion — primary auth source (works online & offline)
   useEffect(() => {
     let active = true;
 
     void resolveGoogleRedirectResult().then((redirected) => {
       if (!active || !redirected) return;
+      setFirebaseUser(redirected.user);
       if (redirected.profile) {
+        firebaseProfileRef.current = redirected.profile;
         setFirebaseProfile(redirected.profile);
         const session = profileToTeamSession(redirected.profile);
         setTeamSession(session);
         saveTeamSession(session);
       }
+      setIsProfileLoading(false);
+      setFirebaseAuthReady(true);
       setActiveTab('team');
     });
 
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!active) return;
+      const seq = ++authSeqRef.current;
       setFirebaseUser(user);
 
       if (!user) {
+        firebaseProfileRef.current = null;
         setFirebaseProfile(null);
+        setIsProfileLoading(false);
         clearCachedFirebaseProfile();
         setFirebaseDoctors([]);
         setFirebaseChambers([]);
@@ -544,35 +560,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return;
       }
 
-      // Immediately restore cached profile if available (instant offline experience)
-      const cached = getCachedFirebaseProfile(user.uid);
+      // Immediately restore cached or in-memory profile for instant unlocked UI (zero Sign-In flicker)
+      const inMemoryProfile =
+        firebaseProfileRef.current?.uid === user.uid ? firebaseProfileRef.current : null;
+      const cached = inMemoryProfile || getCachedFirebaseProfile(user.uid);
       if (cached) {
+        firebaseProfileRef.current = cached;
         setFirebaseProfile(cached);
         const cachedSession = profileToTeamSession(cached);
         setTeamSession(cachedSession);
         saveTeamSession(cachedSession);
+        setIsProfileLoading(false);
+      } else {
+        setIsProfileLoading(true);
       }
+      setFirebaseAuthReady(true);
 
       const freshProfile = await fetchUserProfileFromFirestore(user.uid);
-      if (!active) return;
+      if (!active || seq !== authSeqRef.current) return;
+
       if (freshProfile) {
+        firebaseProfileRef.current = freshProfile;
         setFirebaseProfile(freshProfile);
         const nextSession = profileToTeamSession(freshProfile);
         setTeamSession(nextSession);
         saveTeamSession(nextSession);
-      } else if (!cached) {
+      } else if (!cached && firebaseProfileRef.current?.uid !== user.uid) {
+        firebaseProfileRef.current = null;
         setFirebaseProfile(null);
         setTeamSession(null);
         clearTeamSession();
       }
-      setFirebaseAuthReady(true);
+      setIsProfileLoading(false);
     });
 
     return () => {
       active = false;
       unsubscribe();
     };
-  }, []);
+  }, [setActiveTab]);
 
   // Real-time Firestore subscriptions strictly scoped to areas/{areaId} (works offline via IndexedDB cache)
   useEffect(() => {
@@ -598,7 +624,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [firebaseUser, firebaseProfile?.areaId]);
 
-  const needsFirebaseAreaSetup = Boolean(firebaseUser && firebaseAuthReady && !firebaseProfile);
+  const needsFirebaseAreaSetup = Boolean(
+    firebaseUser && !isProfileLoading && !firebaseProfile && !teamSession
+  );
 
   // Firebase Team Authentication handlers
   const loginTeamWithGoogle = useCallback(async (): Promise<{
@@ -611,7 +639,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (result.redirected) {
         return { ok: true, redirected: true };
       }
+      authSeqRef.current += 1;
+      setFirebaseUser(result.user);
+      setFirebaseAuthReady(true);
+      setIsProfileLoading(false);
       if (result.profile) {
+        firebaseProfileRef.current = result.profile;
         setFirebaseProfile(result.profile);
         const session = profileToTeamSession(result.profile);
         setTeamSession(session);
@@ -622,6 +655,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           message: 'Private area workspace unlocked and cached for offline use.',
         });
       } else {
+        firebaseProfileRef.current = null;
+        setFirebaseProfile(null);
+        setTeamSession(null);
         pushToast({
           type: 'info',
           title: 'Complete your Area Profile',
@@ -637,8 +673,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const loginTeamWithFirebase = useCallback(
     async (email: string, password: string): Promise<{ ok: boolean; error?: string }> => {
       try {
-        const { profile } = await signInTeamUserWithFirebase(email, password);
+        const { user, profile } = await signInTeamUserWithFirebase(email, password);
+        authSeqRef.current += 1;
+        setFirebaseUser(user);
+        setFirebaseAuthReady(true);
+        setIsProfileLoading(false);
         if (profile) {
+          firebaseProfileRef.current = profile;
           setFirebaseProfile(profile);
           const session = profileToTeamSession(profile);
           setTeamSession(session);
@@ -649,6 +690,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             message: 'Private area workspace unlocked and cached for offline use.',
           });
         } else {
+          firebaseProfileRef.current = null;
+          setFirebaseProfile(null);
+          setTeamSession(null);
           pushToast({
             type: 'info',
             title: 'Complete your Area Profile',
@@ -667,7 +711,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     async (input: TeamRegistrationInput): Promise<{ ok: boolean; error?: string }> => {
       try {
         const profile = await registerTeamUserWithFirebase(input);
+        authSeqRef.current += 1;
+        if (auth.currentUser) {
+          setFirebaseUser(auth.currentUser);
+        }
+        firebaseProfileRef.current = profile;
         setFirebaseProfile(profile);
+        setIsProfileLoading(false);
+        setFirebaseAuthReady(true);
         const session = profileToTeamSession(profile);
         setTeamSession(session);
         saveTeamSession(session);
@@ -694,7 +745,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       try {
         const profile = await saveUserAndAreaDocs(currentUser, input);
+        authSeqRef.current += 1;
+        setFirebaseUser(currentUser);
+        firebaseProfileRef.current = profile;
         setFirebaseProfile(profile);
+        setIsProfileLoading(false);
+        setFirebaseAuthReady(true);
         const session = profileToTeamSession(profile);
         setTeamSession(session);
         saveTeamSession(session);
@@ -819,12 +875,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const logoutTeam = useCallback(() => {
-    if (firebaseUser) {
-      void signOutTeamUserFromFirebase().catch(() => {
-        // Best-effort sign out
-      });
-    }
+    authSeqRef.current += 1;
+    void signOutTeamUserFromFirebase().catch(() => {
+      // Best-effort sign out
+    });
+    setFirebaseUser(null);
+    firebaseProfileRef.current = null;
     setFirebaseProfile(null);
+    setIsProfileLoading(false);
     clearCachedFirebaseProfile();
     setFirebaseDoctors([]);
     setFirebaseChambers([]);
@@ -843,7 +901,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       title: 'Signed out of Team Workspace',
       message: 'Public Dashboard remains accessible anytime.',
     });
-  }, [firebaseUser, pushToast]);
+  }, [pushToast]);
 
   const updateTeamPin = useCallback(
     (newPin: string): boolean => {
@@ -1745,13 +1803,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       teamSubTab,
       setTeamSubTab,
       openTeamSection,
-    teamSession,
-    firebaseAuthReady,
-    firebaseUserEmail: firebaseUser?.email ?? null,
-    firebaseUserName: firebaseUser?.displayName ?? null,
-    needsFirebaseAreaSetup,
-    firebaseSyncError,
-    areaNotes,
+      currentUser: firebaseUser,
+      teamSession,
+      firebaseAuthReady,
+      isProfileLoading,
+      firebaseUserEmail: firebaseUser?.email ?? null,
+      firebaseUserName: firebaseUser?.displayName ?? null,
+      needsFirebaseAreaSetup,
+      firebaseSyncError,
+      areaNotes,
     teamPinConfigured,
     loginTeamWithGoogle,
     loginTeamWithFirebase,
@@ -1840,6 +1900,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       openTeamSection,
       teamSession,
       firebaseAuthReady,
+      isProfileLoading,
       firebaseUser,
       needsFirebaseAreaSetup,
       firebaseSyncError,

@@ -51,6 +51,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     activeTab,
     setActiveTab,
     navigateHome,
+    currentUser,
     teamSession,
     isSuperAdmin,
     theme,
@@ -241,7 +242,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
               type="button"
               onClick={() => {
                 setActiveTab('team');
-                window.scrollTo({ top: 0, behavior: 'smooth' });
+                window.scrollTo({ top: 0, behavior: 'auto' });
               }}
               className={`hidden md:inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl text-sm font-semibold whitespace-nowrap shrink-0 transition-colors active:scale-[0.98] cursor-pointer ${
                 activeTab === 'team'
@@ -249,13 +250,13 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                   : 'bg-[#0E7C7B] hover:bg-[#149A99] text-white'
               }`}
             >
-              {teamSession ? (
+              {currentUser || teamSession ? (
                 <Users className="w-4 h-4 shrink-0" />
               ) : (
                 <Lock className="w-3.5 h-3.5 shrink-0" />
               )}
               <span className="max-w-[130px] truncate">
-                {teamSession ? teamSession.areaName : 'Team Login'}
+                {teamSession?.areaName || currentUser?.displayName || (currentUser ? 'Team Area' : 'Team Login')}
               </span>
             </button>
           </div>
@@ -344,7 +345,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
       >
         <div className="grid grid-cols-5 h-[62px] items-center px-1.5">
           {MOBILE_BOTTOM_TABS.map((tab) => {
-            const Icon = tab.id === 'team' && !teamSession ? Lock : tab.icon;
+            const Icon = tab.id === 'team' && !currentUser && !teamSession ? Lock : tab.icon;
             const isActive = tab.matchTabs
               ? tab.matchTabs.includes(activeTab)
               : activeTab === tab.id;

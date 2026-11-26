@@ -228,6 +228,8 @@ export async function saveUserAndAreaDocs(
   const userPath = `users/${user.uid}`;
   try {
     await setDoc(doc(db, 'users', user.uid), profile, { merge: true });
+    // Cache immediately so concurrent onAuthStateChanged checks never see a null profile
+    saveCachedFirebaseProfile(profile);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, userPath);
   }

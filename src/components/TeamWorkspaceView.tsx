@@ -86,13 +86,14 @@ const OFFICER_ROLES = [
 export const TeamWorkspaceView: React.FC = () => {
   const {
     dataset,
+    currentUser,
     teamSession,
     teamSubTab,
     setTeamSubTab,
     firebaseAuthReady,
+    isProfileLoading,
     firebaseUserEmail,
     firebaseUserName,
-    needsFirebaseAreaSetup,
     firebaseSyncError,
     loginTeamWithGoogle,
     loginTeamWithFirebase,
@@ -127,10 +128,13 @@ export const TeamWorkspaceView: React.FC = () => {
 
   // Auto-fill Officer Name from Google displayName when entering 1-step Area setup
   useEffect(() => {
-    if (needsFirebaseAreaSetup && firebaseUserName && !officerNameInput.trim()) {
-      setOfficerNameInput(firebaseUserName);
+    if (currentUser && !teamSession && !officerNameInput.trim()) {
+      const displayName = firebaseUserName || currentUser.displayName || '';
+      if (displayName) {
+        setOfficerNameInput(displayName);
+      }
     }
-  }, [needsFirebaseAreaSetup, firebaseUserName, officerNameInput]);
+  }, [currentUser, teamSession, firebaseUserName, officerNameInput]);
 
   // Unlocked workspace state (sub-tab synced via NavigationContext for instant Home quick-pill jumps)
   const activeSubTab = teamSubTab;
@@ -330,7 +334,7 @@ export const TeamWorkspaceView: React.FC = () => {
   // =========================================================================
   // AUTH INITIALIZING STATE (Only shown briefly before auth state resolves)
   // =========================================================================
-  if (!firebaseAuthReady && !teamSession) {
+  if (!firebaseAuthReady && !currentUser && !teamSession) {
     return (
       <div className="space-y-5">
         <StickyBackBar title="Team Workspace" subtitle="Checking private session..." />
@@ -345,21 +349,52 @@ export const TeamWorkspaceView: React.FC = () => {
   }
 
   // =========================================================================
-  // PROFILE SETUP STATE (Signed in to Firebase Auth, missing users/{uid} doc)
+  // AUTHENTICATED, LOADING AREA PROFILE (NEVER show Sign-In UI once authenticated)
   // =========================================================================
-  if (needsFirebaseAreaSetup && !teamSession) {
+  if (currentUser && isProfileLoading && !teamSession) {
     return (
       <div className="space-y-5">
         <StickyBackBar
-          title="Complete Area Setup"
-          subtitle={firebaseUserEmail || 'Private Team Workspace'}
+          title="Team Workspace"
+          subtitle={firebaseUserEmail || currentUser.email || 'Loading area profile...'}
           rightSlot={
             <button
               type="button"
               onClick={logoutTeam}
-              className="min-h-[38px] px-3 rounded-xl border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-xs font-semibold text-rose-600 dark:text-rose-400 cursor-pointer"
+              className="min-h-[38px] px-3 rounded-xl border border-rose-200 dark:border-rose-500/35 bg-rose-50 dark:bg-rose-950/40 text-xs font-bold text-rose-600 dark:text-rose-300 inline-flex items-center gap-1.5 cursor-pointer"
             >
-              Sign Out
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Logout</span>
+            </button>
+          }
+        />
+        <div className="max-w-lg mx-auto rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-8 text-center">
+          <div className="w-8 h-8 rounded-full border-2 border-[#0E7C7B] border-t-transparent animate-spin mx-auto mb-3" />
+          <p className="text-sm font-medium text-[#0D2B45]/75 dark:text-[#EBF4FA]/75">
+            Unlocking your private Area workspace...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // =========================================================================
+  // PROFILE SETUP STATE (Authenticated currentUser !== null, missing users/{uid} area profile)
+  // =========================================================================
+  if (currentUser && !teamSession) {
+    return (
+      <div className="space-y-5">
+        <StickyBackBar
+          title="Complete Area Setup"
+          subtitle={firebaseUserEmail || currentUser.email || 'Private Team Workspace'}
+          rightSlot={
+            <button
+              type="button"
+              onClick={logoutTeam}
+              className="min-h-[38px] px-3 rounded-xl border border-rose-200 dark:border-rose-500/35 bg-rose-50 dark:bg-rose-950/40 text-xs font-bold text-rose-600 dark:text-rose-300 inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Logout</span>
             </button>
           }
         />
@@ -507,7 +542,8 @@ export const TeamWorkspaceView: React.FC = () => {
   }
 
   // =========================================================================
-  // LOCKED STATE: Firebase Email/Password Sign In & Sign Up
+  // LOCKED STATE: Firebase Email/Password Sign In & Sign Up (ONLY when unauthenticated;
+  // authenticated currentUser !== null cases already returned above)
   // =========================================================================
   if (!teamSession) {
     return (

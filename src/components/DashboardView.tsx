@@ -245,6 +245,7 @@ export const DashboardView: React.FC = () => {
   const {
     isApiConfigured,
     isSuperAdmin,
+    currentUser,
     teamSession,
     firebaseUserName,
     isOnline,
@@ -259,6 +260,18 @@ export const DashboardView: React.FC = () => {
     refreshFromServer,
     syncPendingQueue,
   } = useApp();
+
+  const isTeamAuthenticated = Boolean(currentUser || teamSession);
+  const officerHomeName =
+    teamSession?.mpoName ||
+    firebaseUserName ||
+    currentUser?.displayName ||
+    currentUser?.email?.split('@')[0] ||
+    'Field Officer';
+  const officerHomeArea = teamSession
+    ? [teamSession.district, teamSession.areaName].filter(Boolean).join(' · ') ||
+      teamSession.areaName
+    : 'Complete Area Setup';
 
   const navigateTo = (
     tab:
@@ -597,8 +610,8 @@ export const DashboardView: React.FC = () => {
           </div>
         </button>
 
-        {/* Stacked Row 3: Team / Area Workspace — Compact Sign-In Card when signed out; Expanded Officer + Quick-Access Card when signed in */}
-        {teamSession ? (
+        {/* Stacked Row 3: Team / Area Workspace — Compact Sign-In Card when signed out; Expanded Officer + Quick-Access Card when authenticated */}
+        {isTeamAuthenticated ? (
           <div className="w-full rounded-2xl bg-white dark:bg-[#0D2235] border border-emerald-500/25 dark:border-[#149A99]/30 shadow-[0_6px_18px_rgba(10,40,75,0.08)] dark:shadow-black/30 p-3 sm:p-3.5 space-y-2.5">
             {/* Officer Name + District/Area Badge + Sign Out */}
             <div className="flex items-center justify-between gap-2">
@@ -612,15 +625,12 @@ export const DashboardView: React.FC = () => {
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="font-display font-bold text-[14px] sm:text-[15px] text-[#0D2B45] dark:text-white leading-tight truncate group-hover:text-[#0E7C7B] dark:group-hover:text-[#22E3D0] transition-colors">
-                    {teamSession.mpoName || firebaseUserName || 'Field Officer'}
+                    {officerHomeName}
                   </div>
                   <div className="flex items-center gap-1 mt-0.5 min-w-0">
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/15 text-[#0A7D63] dark:text-[#5EEAD4] text-[10.5px] font-semibold truncate max-w-full">
                       <MapPin className="w-3 h-3 shrink-0" />
-                      <span className="truncate">
-                        {[teamSession.district, teamSession.areaName].filter(Boolean).join(' · ') ||
-                          teamSession.areaName}
-                      </span>
+                      <span className="truncate">{officerHomeArea}</span>
                     </span>
                   </div>
                 </div>
