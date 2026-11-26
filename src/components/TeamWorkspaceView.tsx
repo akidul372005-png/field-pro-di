@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   Building2,
@@ -30,6 +30,27 @@ import { buildAreaIdSlug } from '../services/firebaseTeam';
 
 type AuthMode = 'signin' | 'signup';
 type TeamSubTab = 'doctors' | 'hospitals' | 'notes' | 'team';
+
+const GoogleMark: React.FC<{ className?: string }> = ({ className = 'w-5 h-5' }) => (
+  <svg viewBox="0 0 24 24" aria-hidden="true" className={className}>
+    <path
+      fill="#4285F4"
+      d="M23.49 12.27c0-.79-.07-1.55-.2-2.27H12v4.3h6.45a5.52 5.52 0 0 1-2.39 3.62v3h3.87c2.26-2.08 3.56-5.15 3.56-8.65z"
+    />
+    <path
+      fill="#34A853"
+      d="M12 24c3.24 0 5.95-1.07 7.93-2.91l-3.87-3c-1.07.72-2.45 1.15-4.06 1.15-3.12 0-5.77-2.11-6.72-4.95H1.29v3.1A12 12 0 0 0 12 24z"
+    />
+    <path
+      fill="#FBBC05"
+      d="M5.28 14.29A7.2 7.2 0 0 1 4.9 12c0-.79.14-1.56.38-2.29v-3.1H1.29A12 12 0 0 0 0 12c0 1.94.46 3.77 1.29 5.39l3.99-3.1z"
+    />
+    <path
+      fill="#EA4335"
+      d="M12 4.76c1.76 0 3.34.61 4.58 1.8l3.44-3.44C17.94 1.19 15.23 0 12 0A12 12 0 0 0 1.29 6.61l3.99 3.1C6.23 6.87 8.88 4.76 12 4.76z"
+    />
+  </svg>
+);
 
 const BD_DISTRICTS = [
   'Dhaka',
@@ -73,9 +94,11 @@ export const TeamWorkspaceView: React.FC = () => {
     teamSession,
     firebaseAuthReady,
     firebaseUserEmail,
+    firebaseUserName,
     needsFirebaseAreaSetup,
     firebaseSyncError,
     areaNotes,
+    loginTeamWithGoogle,
     loginTeamWithFirebase,
     registerTeamWithFirebase,
     completeFirebaseAreaProfile,
@@ -105,6 +128,14 @@ export const TeamWorkspaceView: React.FC = () => {
   const [showAreaCodeOption, setShowAreaCodeOption] = useState(false);
   const [authError, setAuthError] = useState('');
   const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [googleSubmitting, setGoogleSubmitting] = useState(false);
+
+  // Auto-fill Officer Name from Google displayName when entering 1-step Area setup
+  useEffect(() => {
+    if (needsFirebaseAreaSetup && firebaseUserName && !officerNameInput.trim()) {
+      setOfficerNameInput(firebaseUserName);
+    }
+  }, [needsFirebaseAreaSetup, firebaseUserName, officerNameInput]);
 
   // Unlocked workspace state
   const [activeSubTab, setActiveSubTab] = useState<TeamSubTab>('doctors');
@@ -187,6 +218,21 @@ export const TeamWorkspaceView: React.FC = () => {
         String(n.Author_Name ?? '').toLowerCase().includes(q)
     );
   }, [areaNotes, noteSearch]);
+
+  const handleGoogleSignIn = async () => {
+    setAuthError('');
+    setGoogleSubmitting(true);
+    try {
+      const res = await loginTeamWithGoogle();
+      if (!res.ok) {
+        setAuthError(res.error || 'Could not complete Google Sign-In.');
+      } else if (!res.redirected) {
+        setActiveSubTab('doctors');
+      }
+    } finally {
+      setGoogleSubmitting(false);
+    }
+  };
 
   const handleSignInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -379,23 +425,27 @@ export const TeamWorkspaceView: React.FC = () => {
           }
         />
 
-        <div className="max-w-lg mx-auto rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-5 sm:p-6 space-y-4">
+        <div className="max-w-lg mx-auto rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-5 sm:p-6 space-y-4 shadow-sm">
           <div>
             <h1 className="font-display font-bold text-lg text-[#0D2B45] dark:text-white">
-              Assign Your Territory Area
+              Quick Officer Area Registration
             </h1>
             <p className="text-xs text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 mt-1">
-              Set your Officer Name and Area details so your Doctors, Chambers, Hospitals, and Area
-              Notes are strictly scoped to your territory.
+              One quick step — enter your territory details to unlock your private Area workspace
+              both online and offline.
             </p>
           </div>
 
           <form onSubmit={handleCompleteProfileSubmit} className="space-y-3.5">
             <div>
-              <label className="block text-xs font-semibold text-[#0D2B45] dark:text-[#EBF4FA] mb-1">
-                Full Name *
+              <label
+                htmlFor="setup-officer-name"
+                className="block text-xs font-semibold text-[#0D2B45] dark:text-[#EBF4FA] mb-1"
+              >
+                Officer Name *
               </label>
               <input
+                id="setup-officer-name"
                 type="text"
                 required
                 value={officerNameInput}
@@ -407,10 +457,14 @@ export const TeamWorkspaceView: React.FC = () => {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-[#0D2B45] dark:text-[#EBF4FA] mb-1">
-                  District *
+                <label
+                  htmlFor="setup-district"
+                  className="block text-xs font-semibold text-[#0D2B45] dark:text-[#EBF4FA] mb-1"
+                >
+                  District (জেলা) *
                 </label>
                 <input
+                  id="setup-district"
                   type="text"
                   list="bd-districts-list"
                   required
@@ -421,31 +475,68 @@ export const TeamWorkspaceView: React.FC = () => {
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-[#0D2B45] dark:text-[#EBF4FA] mb-1">
-                  Upazila / Thana
+                <label
+                  htmlFor="setup-area"
+                  className="block text-xs font-semibold text-[#0D2B45] dark:text-[#EBF4FA] mb-1"
+                >
+                  Upazila / Territory Area Name (উপজেলা/এরিয়া) *
                 </label>
                 <input
+                  id="setup-area"
                   type="text"
-                  value={upazilaInput}
-                  onChange={(e) => setUpazilaInput(e.target.value)}
-                  placeholder="e.g. Dhanmondi"
+                  required
+                  value={areaNameInput}
+                  onChange={(e) => setAreaNameInput(e.target.value)}
+                  placeholder="e.g. Dhanmondi & Shahbagh"
                   className="w-full min-h-[44px] px-3.5 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-[#0D2B45] dark:text-[#EBF4FA] mb-1">
-                Area / Territory Name *
+              <label
+                htmlFor="setup-mobile"
+                className="block text-xs font-semibold text-[#0D2B45] dark:text-[#EBF4FA] mb-1"
+              >
+                Mobile Number (Optional)
               </label>
               <input
-                type="text"
-                required
-                value={areaNameInput}
-                onChange={(e) => setAreaNameInput(e.target.value)}
-                placeholder="e.g. Dhanmondi & Shahbagh"
+                id="setup-mobile"
+                type="tel"
+                value={phoneInput}
+                onChange={(e) => setPhoneInput(e.target.value)}
+                placeholder="017XXXXXXXX"
                 className="w-full min-h-[44px] px-3.5 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
               />
+            </div>
+
+            {/* Optional Join Existing Area ID toggle */}
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowAreaCodeOption((prev) => !prev)}
+                className="text-xs font-semibold text-[#0E7C7B] dark:text-[#149A99] hover:underline cursor-pointer"
+              >
+                {showAreaCodeOption
+                  ? 'Hide shared Area ID field'
+                  : 'Joining a teammate? Enter shared Area ID (optional)'}
+              </button>
+              {showAreaCodeOption && (
+                <div className="mt-1.5">
+                  <input
+                    type="text"
+                    value={customAreaCode}
+                    onChange={(e) => setCustomAreaCode(e.target.value)}
+                    placeholder="e.g. dhaka-dhanmondi"
+                    className="w-full min-h-[42px] px-3.5 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-sm font-mono text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+                  />
+                </div>
+              )}
+              {previewAreaSlug && (
+                <div className="mt-1 text-[11px] text-[#0D2B45]/55 dark:text-[#EBF4FA]/55 font-mono truncate">
+                  Workspace ID: {previewAreaSlug}
+                </div>
+              )}
             </div>
 
             {authError && (
@@ -460,9 +551,9 @@ export const TeamWorkspaceView: React.FC = () => {
             <button
               type="submit"
               disabled={authSubmitting}
-              className="w-full min-h-[46px] px-4 rounded-xl bg-[#0E7C7B] hover:bg-[#095C5B] disabled:opacity-50 text-white text-sm font-semibold transition-colors cursor-pointer"
+              className="w-full min-h-[46px] px-4 rounded-xl bg-gradient-to-r from-[#0D2B45] to-[#0E7C7B] hover:brightness-110 disabled:opacity-50 text-white text-sm font-semibold transition-all active:scale-[0.98] cursor-pointer"
             >
-              {authSubmitting ? 'Saving...' : 'Enter Private Area Workspace'}
+              {authSubmitting ? 'Saving Profile...' : 'Unlock Private Area Workspace'}
             </button>
           </form>
         </div>
@@ -490,7 +581,7 @@ export const TeamWorkspaceView: React.FC = () => {
         <div className="max-w-lg mx-auto pt-1 sm:pt-3 space-y-4">
           <div className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-5 sm:p-6 space-y-5">
             <div className="flex items-start gap-3.5">
-              <div className="w-11 h-11 rounded-2xl bg-[#0D2B45] dark:bg-[#0E7C7B] text-white flex items-center justify-center shrink-0">
+              <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#0D2B45] to-[#0E7C7B] text-white flex items-center justify-center shrink-0 shadow-sm">
                 <Lock className="w-5 h-5" />
               </div>
               <div className="min-w-0">
@@ -498,10 +589,30 @@ export const TeamWorkspaceView: React.FC = () => {
                   Team / Area Workspace
                 </h1>
                 <p className="text-xs sm:text-sm text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 mt-0.5 leading-relaxed">
-                  Sign in with your officer account to manage private Doctors, Chambers, Hospitals,
-                  and Area Notes. Stays logged in offline automatically.
+                  Sign in with Google or email to manage private Doctors, Chambers, Hospitals, and
+                  Area Notes. Stays logged in offline automatically.
                 </p>
               </div>
+            </div>
+
+            {/* Prominent One-Tap Google Sign-In Button */}
+            <button
+              type="button"
+              onClick={() => void handleGoogleSignIn()}
+              disabled={googleSubmitting || authSubmitting}
+              className="w-full min-h-[48px] px-4 rounded-xl bg-white dark:bg-[#071522] hover:bg-[#F4F8FC] dark:hover:bg-[#102940] border border-[#0D2B45]/18 dark:border-[#EBF4FA]/20 shadow-sm text-sm font-semibold text-[#0D2B45] dark:text-white inline-flex items-center justify-center gap-2.5 transition-all active:scale-[0.98] disabled:opacity-60 cursor-pointer"
+            >
+              <GoogleMark className="w-5 h-5 shrink-0" />
+              <span>{googleSubmitting ? 'Connecting to Google...' : 'Continue with Google'}</span>
+            </button>
+
+            {/* Clean "or" Divider */}
+            <div className="relative flex items-center">
+              <div className="flex-1 border-t border-[#0D2B45]/12 dark:border-[#EBF4FA]/12" />
+              <span className="px-3 text-xs font-medium text-[#0D2B45]/50 dark:text-[#EBF4FA]/50">
+                or
+              </span>
+              <div className="flex-1 border-t border-[#0D2B45]/12 dark:border-[#EBF4FA]/12" />
             </div>
 
             {/* Auth Mode Switcher: Sign In | Create Account */}

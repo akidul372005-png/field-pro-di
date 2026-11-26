@@ -22,16 +22,21 @@ import {
 } from '../types';
 import { createStarterDataset } from '../data/seedData';
 
-const ENV_DEFAULT_API_URL =
-  typeof import.meta !== 'undefined' &&
-  (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_APPS_SCRIPT_URL
-    ? String(
-        (import.meta as unknown as { env?: Record<string, string | undefined> }).env
-          ?.VITE_APPS_SCRIPT_URL
-      ).trim()
-    : '';
+const VITE_ENV =
+  typeof import.meta !== 'undefined'
+    ? ((import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {})
+    : {};
 
-export const DEFAULT_API_URL = ENV_DEFAULT_API_URL || 'YOUR_WEB_APP_URL';
+const ENV_DEFAULT_API_URL = String(VITE_ENV.VITE_APPS_SCRIPT_URL ?? '').trim();
+
+/**
+ * Built-in default Google Apps Script Web App URL for direct client-side sync
+ * on Vercel, PWA, and Android APK/TWA builds (zero /api/ server proxy dependency).
+ * Set VITE_APPS_SCRIPT_URL in .env / Vercel or paste the deployed /exec URL here.
+ */
+export const DEFAULT_APPS_SCRIPT_URL = ENV_DEFAULT_API_URL || '';
+
+export const DEFAULT_API_URL = DEFAULT_APPS_SCRIPT_URL || 'YOUR_WEB_APP_URL';
 
 const PLACEHOLDER_API_URLS = new Set([
   'PASTE_YOUR_WEB_APP_URL_HERE',
@@ -3806,10 +3811,10 @@ export function formatDoseSummaryForCopy(
 }
 
 // ============================================================================
-// SUPER ADMIN SERVER AUTH & PUBLIC CONFIG CLIENT HELPERS
+// CLIENT-SIDE SUPER ADMIN VERIFICATION (Zero /api/ dependency — Vercel & APK)
 // ============================================================================
 
-export type SuperAdminConfigSource = 'env' | 'claimed' | 'unconfigured' | 'unavailable';
+export type SuperAdminConfigSource = 'env' | 'claimed' | 'unconfigured';
 
 export interface SuperAdminStatusResponse {
   configured: boolean;
@@ -3818,71 +3823,192 @@ export interface SuperAdminStatusResponse {
   expiresAt: number | null;
 }
 
+const SUPER_ADMIN_HASH_KEY = 'mfa_di_super_admin_sha256_v1';
+const SUPER_ADMIN_SESSION_KEY = 'mfa_di_super_admin_session_v1';
+const SUPER_ADMIN_SALT = 'field-pro-di::super-admin::v1::';
+const SUPER_ADMIN_TTL_MS = 12 * 60 * 60 * 1000;
+
+function getEnvSuperAdminPasscode(): string {
+  return String(VITE_ENV.VITE_SUPER_ADMIN_PASSCODE ?? '').trim();
+}
+
+// Pure-JS SHA-256 fallback for non-HTTPS contexts where crypto.subtle may be absent
+function sha256PureJs(message: string): string {
+  const bytes = new TextEncoder().encode(message);
+  const k = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+  ];
+  const h = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+  ];
+  const bitLen = bytes.length * 8;
+  const paddedLen = Math.ceil((bytes.length + 9) / 64) * 64;
+  const padded = new Uint8Array(paddedLen);
+  padded.set(bytes);
+  padded[bytes.length] = 0x80;
+  const view = new DataView(padded.buffer);
+  view.setUint32(paddedLen - 8, Math.floor(bitLen / 0x100000000), false);
+  view.setUint32(paddedLen - 4, bitLen >>> 0, false);
+
+  const w = new Uint32Array(64);
+  for (let offset = 0; offset < paddedLen; offset += 64) {
+    for (let i = 0; i < 16; i++) {
+      w[i] = view.getUint32(offset + i * 4, false);
+    }
+    for (let i = 16; i < 64; i++) {
+      const s0 =
+        ((w[i - 15] >>> 7) | (w[i - 15] << 25)) ^
+        ((w[i - 15] >>> 18) | (w[i - 15] << 14)) ^
+        (w[i - 15] >>> 3);
+      const s1 =
+        ((w[i - 2] >>> 17) | (w[i - 2] << 15)) ^
+        ((w[i - 2] >>> 19) | (w[i - 2] << 13)) ^
+        (w[i - 2] >>> 10);
+      w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+    }
+    let [a, b, c, d, e, f, g, hh] = h;
+    for (let i = 0; i < 64; i++) {
+      const S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
+      const ch = (e & f) ^ (~e & g);
+      const temp1 = (hh + S1 + ch + k[i] + w[i]) >>> 0;
+      const S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+      const maj = (a & b) ^ (a & c) ^ (b & c);
+      const temp2 = (S0 + maj) >>> 0;
+      hh = g;
+      g = f;
+      f = e;
+      e = (d + temp1) >>> 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (temp1 + temp2) >>> 0;
+    }
+    h[0] = (h[0] + a) >>> 0;
+    h[1] = (h[1] + b) >>> 0;
+    h[2] = (h[2] + c) >>> 0;
+    h[3] = (h[3] + d) >>> 0;
+    h[4] = (h[4] + e) >>> 0;
+    h[5] = (h[5] + f) >>> 0;
+    h[6] = (h[6] + g) >>> 0;
+    h[7] = (h[7] + hh) >>> 0;
+  }
+  return h.map((val) => val.toString(16).padStart(8, '0')).join('');
+}
+
+async function hashSuperAdminPasscode(passcode: string): Promise<string> {
+  const input = `${SUPER_ADMIN_SALT}${passcode.trim()}`;
+  try {
+    if (typeof crypto !== 'undefined' && crypto.subtle) {
+      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+      return Array.from(new Uint8Array(buf))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+    }
+  } catch {
+    // Fallback to pure-JS SHA-256
+  }
+  return sha256PureJs(input);
+}
+
+function constantTimeHexEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+function getStoredSuperAdminHash(): string {
+  try {
+    return (localStorage.getItem(SUPER_ADMIN_HASH_KEY) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function saveStoredSuperAdminHash(hash: string): void {
+  try {
+    localStorage.setItem(SUPER_ADMIN_HASH_KEY, hash);
+  } catch {
+    // Ignore storage quota errors
+  }
+}
+
+export function getSavedSuperAdminSession(): { token: string; expiresAt: number } | null {
+  try {
+    const raw = sessionStorage.getItem(SUPER_ADMIN_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { token?: string; expiresAt?: number };
+    if (!parsed?.token || !parsed.expiresAt || Date.now() > parsed.expiresAt) {
+      sessionStorage.removeItem(SUPER_ADMIN_SESSION_KEY);
+      return null;
+    }
+    return { token: parsed.token, expiresAt: parsed.expiresAt };
+  } catch {
+    return null;
+  }
+}
+
+function persistSuperAdminSession(token: string, expiresAt: number): void {
+  try {
+    sessionStorage.setItem(SUPER_ADMIN_SESSION_KEY, JSON.stringify({ token, expiresAt }));
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+function clearPersistedSuperAdminSession(): void {
+  try {
+    sessionStorage.removeItem(SUPER_ADMIN_SESSION_KEY);
+  } catch {
+    // Ignore
+  }
+}
+
+function getLocalSuperAdminSource(): SuperAdminConfigSource {
+  if (getEnvSuperAdminPasscode().length >= 4) return 'env';
+  if (getStoredSuperAdminHash().length === 64) return 'claimed';
+  return 'unconfigured';
+}
+
 export async function fetchSuperAdminStatus(
   token?: string | null
 ): Promise<SuperAdminStatusResponse> {
-  try {
-    const headers: Record<string, string> = {};
-    if (token) {
-      headers.Authorization = `Bearer ${token}`;
-    }
-    const res = await fetch('/api/super-admin/status', {
-      method: 'GET',
-      headers,
-    });
-    const text = await res.text();
-    const data = JSON.parse(text) as Partial<SuperAdminStatusResponse> & { ok?: boolean };
-    if (!res.ok || !data.ok) {
-      return {
-        configured: false,
-        source: 'unavailable',
-        authenticated: false,
-        expiresAt: null,
-      };
-    }
-    return {
-      configured: Boolean(data.configured),
-      source: (data.source as SuperAdminConfigSource) || 'unconfigured',
-      authenticated: Boolean(data.authenticated),
-      expiresAt: typeof data.expiresAt === 'number' ? data.expiresAt : null,
-    };
-  } catch {
-    return {
-      configured: false,
-      source: 'unavailable',
-      authenticated: false,
-      expiresAt: null,
-    };
-  }
+  const source = getLocalSuperAdminSource();
+  const saved = getSavedSuperAdminSession();
+  const activeToken = token || saved?.token || null;
+  const authenticated = Boolean(
+    activeToken && (!saved || Date.now() < saved.expiresAt)
+  );
+  return {
+    configured: source !== 'unconfigured',
+    source,
+    authenticated,
+    expiresAt: authenticated ? saved?.expiresAt ?? Date.now() + SUPER_ADMIN_TTL_MS : null,
+  };
 }
 
 export async function setupSuperAdminPasscodeOnServer(
   passcode: string
 ): Promise<{ ok: true; token: string; expiresAt: number; source: 'claimed' } | { ok: false; error: string }> {
-  try {
-    const res = await fetch('/api/super-admin/setup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ passcode }),
-    });
-    const data = (await res.json()) as {
-      ok?: boolean;
-      token?: string;
-      expiresAt?: number;
-      error?: string;
-    };
-    if (!res.ok || !data.ok || !data.token) {
-      return { ok: false, error: data.error || 'Could not configure Super Admin passcode.' };
-    }
-    return {
-      ok: true,
-      token: data.token,
-      expiresAt: Number(data.expiresAt) || Date.now() + 12 * 60 * 60 * 1000,
-      source: 'claimed',
-    };
-  } catch {
-    return { ok: false, error: 'Unable to reach server. Super Admin setup requires an active connection.' };
+  const cleaned = passcode.trim();
+  if (cleaned.length < 6) {
+    return { ok: false, error: 'Super Admin passcode must be at least 6 characters.' };
   }
+  const hash = await hashSuperAdminPasscode(cleaned);
+  saveStoredSuperAdminHash(hash);
+  const token = `sa-local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  const expiresAt = Date.now() + SUPER_ADMIN_TTL_MS;
+  persistSuperAdminSession(token, expiresAt);
+  return { ok: true, token, expiresAt, source: 'claimed' };
 }
 
 export async function loginSuperAdminOnServer(
@@ -3891,118 +4017,87 @@ export async function loginSuperAdminOnServer(
   | { ok: true; token: string; expiresAt: number; source: 'env' | 'claimed' }
   | { ok: false; error: string }
 > {
-  try {
-    const res = await fetch('/api/super-admin/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ passcode }),
-    });
-    const data = (await res.json()) as {
-      ok?: boolean;
-      token?: string;
-      expiresAt?: number;
-      source?: 'env' | 'claimed';
-      error?: string;
-    };
-    if (!res.ok || !data.ok || !data.token) {
-      return { ok: false, error: data.error || 'Invalid Super Admin passcode.' };
-    }
-    return {
-      ok: true,
-      token: data.token,
-      expiresAt: Number(data.expiresAt) || Date.now() + 12 * 60 * 60 * 1000,
-      source: data.source || 'claimed',
-    };
-  } catch {
-    return { ok: false, error: 'Unable to reach server. Check your connection and try again.' };
+  const cleaned = passcode.trim();
+  if (!cleaned) {
+    return { ok: false, error: 'Enter your Super Admin passcode.' };
   }
+
+  const envPass = getEnvSuperAdminPasscode();
+  const storedHash = getStoredSuperAdminHash();
+  const candidateHash = await hashSuperAdminPasscode(cleaned);
+
+  if (envPass.length >= 4) {
+    const envHash = await hashSuperAdminPasscode(envPass);
+    if (!constantTimeHexEqual(candidateHash, envHash)) {
+      return { ok: false, error: 'Invalid Super Admin passcode.' };
+    }
+    const token = `sa-env-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    const expiresAt = Date.now() + SUPER_ADMIN_TTL_MS;
+    persistSuperAdminSession(token, expiresAt);
+    return { ok: true, token, expiresAt, source: 'env' };
+  }
+
+  if (storedHash.length === 64) {
+    if (!constantTimeHexEqual(candidateHash, storedHash)) {
+      return { ok: false, error: 'Invalid Super Admin passcode.' };
+    }
+    const token = `sa-local-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    const expiresAt = Date.now() + SUPER_ADMIN_TTL_MS;
+    persistSuperAdminSession(token, expiresAt);
+    return { ok: true, token, expiresAt, source: 'claimed' };
+  }
+
+  return { ok: false, error: 'Super Admin passcode is not set yet. Create one first.' };
 }
 
 export async function changeSuperAdminPasscodeOnServer(
-  token: string,
+  _token: string,
   currentPasscode: string,
   newPasscode: string
 ): Promise<{ ok: boolean; error?: string }> {
-  try {
-    const res = await fetch('/api/super-admin/change-passcode', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ currentPasscode, newPasscode }),
-    });
-    const data = (await res.json()) as { ok?: boolean; error?: string };
-    if (!res.ok || !data.ok) {
-      return { ok: false, error: data.error || 'Could not update Super Admin passcode.' };
-    }
-    return { ok: true };
-  } catch {
-    return { ok: false, error: 'Unable to reach server. Please try again.' };
+  if (getEnvSuperAdminPasscode().length >= 4) {
+    return {
+      ok: false,
+      error: 'Passcode is managed via VITE_SUPER_ADMIN_PASSCODE environment variable.',
+    };
   }
+  const storedHash = getStoredSuperAdminHash();
+  const currentHash = await hashSuperAdminPasscode(currentPasscode.trim());
+  if (!storedHash || !constantTimeHexEqual(currentHash, storedHash)) {
+    return { ok: false, error: 'Current passcode is incorrect.' };
+  }
+  if (newPasscode.trim().length < 6) {
+    return { ok: false, error: 'New passcode must be at least 6 characters.' };
+  }
+  const nextHash = await hashSuperAdminPasscode(newPasscode.trim());
+  saveStoredSuperAdminHash(nextHash);
+  return { ok: true };
 }
 
-export async function logoutSuperAdminOnServer(token: string | null): Promise<void> {
-  if (!token) return;
-  try {
-    await fetch('/api/super-admin/logout', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-  } catch {
-    // Best-effort server logout; client memory token is always cleared
-  }
+export async function logoutSuperAdminOnServer(_token: string | null): Promise<void> {
+  clearPersistedSuperAdminSession();
 }
 
 export async function fetchPublicConfigFromServer(): Promise<{
   defaultApiUrl: string;
   source: 'env' | 'saved' | 'none';
 }> {
-  try {
-    const res = await fetch('/api/public-config', { method: 'GET' });
-    if (!res.ok) return { defaultApiUrl: '', source: 'none' };
-    const data = (await res.json()) as {
-      ok?: boolean;
-      defaultApiUrl?: string;
-      source?: 'env' | 'saved' | 'none';
-    };
-    if (!data.ok) return { defaultApiUrl: '', source: 'none' };
-    return {
-      defaultApiUrl: String(data.defaultApiUrl ?? '').trim(),
-      source: data.source || 'none',
-    };
-  } catch {
-    return { defaultApiUrl: '', source: 'none' };
+  if (isConfiguredApiUrl(DEFAULT_APPS_SCRIPT_URL)) {
+    return { defaultApiUrl: DEFAULT_APPS_SCRIPT_URL, source: 'env' };
   }
+  const saved = getSavedApiUrl();
+  if (isConfiguredApiUrl(saved)) {
+    return { defaultApiUrl: saved, source: 'saved' };
+  }
+  return { defaultApiUrl: '', source: 'none' };
 }
 
 export async function saveServerDefaultApiUrl(
-  token: string,
+  _token: string,
   apiUrl: string
 ): Promise<{ ok: boolean; defaultApiUrl?: string; error?: string }> {
-  try {
-    const res = await fetch('/api/super-admin/default-api-url', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ apiUrl }),
-    });
-    const data = (await res.json()) as {
-      ok?: boolean;
-      defaultApiUrl?: string;
-      error?: string;
-    };
-    if (!res.ok || !data.ok) {
-      return { ok: false, error: data.error || 'Could not publish default endpoint URL.' };
-    }
-    return { ok: true, defaultApiUrl: data.defaultApiUrl };
-  } catch {
-    return { ok: false, error: 'Unable to reach app server.' };
-  }
+  saveApiUrl(apiUrl);
+  return { ok: true, defaultApiUrl: apiUrl.trim() };
 }
 
 

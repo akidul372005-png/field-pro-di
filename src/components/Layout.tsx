@@ -78,8 +78,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
   return (
     <div className="min-h-screen flex flex-col overflow-x-clip bg-[#F4F8FC] dark:bg-[#071522] text-[#0D2B45] dark:text-[#EBF4FA] transition-colors">
-      {/* Top Bar: Compact mobile bar (Logo, Sync, Settings) | Sleek 3-zone desktop header */}
-      <header className="sticky top-0 z-30 h-[54px] md:h-16 bg-[#0B2239] md:bg-[#0D2B45] text-white border-b border-white/10 pt-safe">
+      {/* Top Bar: Deep-navy-to-teal gradient header */}
+      <header className="sticky top-0 z-30 h-[50px] md:h-16 bg-gradient-to-r from-[#071D33] via-[#0D2B45] to-[#0E7C7B] text-white border-b border-white/10 shadow-sm pt-safe">
         <div className="max-w-7xl mx-auto h-full px-3.5 sm:px-6 flex items-center justify-between gap-2.5 md:gap-6">
           {/* Zone 1: Brand Title — tapping ALWAYS navigates back to Home/Dashboard */}
           <div className="flex items-center gap-2.5 min-w-0 shrink-0">
@@ -250,13 +250,19 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         </div>
       </header>
 
-      {/* Main Content Viewport (with bottom clearance for mobile fixed tab bar) */}
-      <main className="flex-1 w-full max-w-7xl mx-auto px-3.5 sm:px-6 pt-3 sm:pt-5 pb-12 md:pb-10">
+      {/* Main Content Viewport (tight zero-scroll fit on mobile Home, generous spacing elsewhere) */}
+      <main
+        className={`flex-1 w-full max-w-7xl mx-auto px-3.5 sm:px-6 ${
+          activeTab === 'dashboard'
+            ? 'pt-2.5 pb-[72px] sm:pt-5 md:pb-10'
+            : 'pt-3 sm:pt-5 pb-12 md:pb-10'
+        }`}
+      >
         {children}
       </main>
 
-      {/* Minimal Global Brand Footer with bottom nav clearance on mobile */}
-      <div className="pb-20 md:pb-0">
+      {/* Minimal Global Brand Footer (hidden on mobile Home since Home includes the compact MedMentor BD bar) */}
+      <div className={activeTab === 'dashboard' ? 'hidden md:block' : 'pb-20 md:pb-0'}>
         <MedMentorFooter />
       </div>
 

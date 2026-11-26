@@ -11,7 +11,7 @@ import {
 import { useApp } from '../context/AppContext';
 import { getEffectiveIndications, isActiveRecord } from '../services/api';
 
-export const GlobalSearchBar: React.FC = () => {
+export const GlobalSearchBar: React.FC<{ compact?: boolean }> = ({ compact = false }) => {
   const {
     dataset,
     teamSession,
@@ -115,7 +115,9 @@ export const GlobalSearchBar: React.FC = () => {
     <div ref={containerRef} className="relative w-full">
       <div className="relative flex items-center">
         <Search
-          className="w-4 h-4 sm:w-5 sm:h-5 text-[#0D2B45]/45 dark:text-[#EBF4FA]/45 absolute left-3.5 sm:left-4 pointer-events-none"
+          className={`${
+            compact ? 'w-4 h-4 left-3' : 'w-4 h-4 sm:w-5 sm:h-5 left-3.5 sm:left-4'
+          } text-[#0D2B45]/45 dark:text-[#EBF4FA]/45 absolute pointer-events-none`}
           aria-hidden="true"
         />
         <input
@@ -130,11 +132,15 @@ export const GlobalSearchBar: React.FC = () => {
           }}
           placeholder={
             teamSession
-              ? 'Search products, generics, indications, chapters, or area doctors...'
-              : 'Search products, generics, indications, or Bengali chapters...'
+              ? 'Search products, generics, indications, chapters, doctors...'
+              : 'Search products, generics, indications, or chapters...'
           }
           aria-label="Global search"
-          className="w-full min-h-[48px] sm:min-h-[52px] pl-10 sm:pl-12 pr-11 rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/15 shadow-sm text-base md:text-[15px] text-[#0D2B45] dark:text-[#EBF4FA] placeholder:text-[#0D2B45]/45 dark:placeholder:text-[#EBF4FA]/45 focus:outline-none focus:border-[#0E7C7B] focus:ring-2 focus:ring-[#0E7C7B]/20 transition-colors"
+          className={
+            compact
+              ? 'w-full py-2 min-h-[40px] sm:min-h-[44px] pl-9 pr-9 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/15 shadow-sm text-sm text-[#0D2B45] dark:text-[#EBF4FA] placeholder:text-[#0D2B45]/45 dark:placeholder:text-[#EBF4FA]/45 focus:outline-none focus:border-[#0E7C7B] focus:ring-2 focus:ring-[#0E7C7B]/20 transition-colors'
+              : 'w-full min-h-[48px] sm:min-h-[52px] pl-10 sm:pl-12 pr-11 rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/15 shadow-sm text-base md:text-[15px] text-[#0D2B45] dark:text-[#EBF4FA] placeholder:text-[#0D2B45]/45 dark:placeholder:text-[#EBF4FA]/45 focus:outline-none focus:border-[#0E7C7B] focus:ring-2 focus:ring-[#0E7C7B]/20 transition-colors'
+          }
         />
         {query && (
           <button
@@ -144,7 +150,9 @@ export const GlobalSearchBar: React.FC = () => {
               setOpen(false);
             }}
             aria-label="Clear search"
-            className="absolute right-1.5 min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-[#0D2B45]/50 hover:text-[#0D2B45] dark:text-[#EBF4FA]/50 dark:hover:text-white"
+            className={`absolute right-1 ${
+              compact ? 'min-h-[34px] min-w-[34px]' : 'min-h-[40px] min-w-[40px]'
+            } flex items-center justify-center rounded-lg text-[#0D2B45]/50 hover:text-[#0D2B45] dark:text-[#EBF4FA]/50 dark:hover:text-white`}
           >
             <X className="w-4 h-4" />
           </button>

@@ -756,18 +756,6 @@ export const SettingsView: React.FC = () => {
               </form>
             )}
           </div>
-        ) : superAdminSource === 'unavailable' ? (
-          <div className="rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-[#0D2B45]/75 dark:text-[#EBF4FA]/75">
-            <span>Admin verification requires an active connection.</span>
-            <button
-              type="button"
-              onClick={() => void refreshSuperAdminStatus()}
-              className="min-h-[36px] px-3 rounded-lg bg-[#EBF4FA] dark:bg-[#133859] text-[#0D2B45] dark:text-white font-semibold inline-flex items-center gap-1.5 cursor-pointer"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Retry</span>
-            </button>
-          </div>
         ) : (
           <form onSubmit={handleSuperAdminSubmit} className="space-y-2.5">
             {superAdminSource === 'unconfigured' && (

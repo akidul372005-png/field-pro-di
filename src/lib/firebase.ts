@@ -2,6 +2,7 @@ import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import {
   browserLocalPersistence,
   getAuth,
+  GoogleAuthProvider,
   setPersistence,
   Auth,
 } from 'firebase/auth';
@@ -28,6 +29,9 @@ export const firebaseConfig = {
 export const app: FirebaseApp = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 
 export const auth: Auth = getAuth(app);
+
+export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 // Keep signed-in Team users logged in offline across app restarts
 if (typeof window !== 'undefined') {

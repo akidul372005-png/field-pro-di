@@ -1,7 +1,10 @@
 import {
   User,
   createUserWithEmailAndPassword,
+  getRedirectResult,
   signInWithEmailAndPassword,
+  signInWithPopup,
+  signInWithRedirect,
   signOut,
   updateProfile,
 } from 'firebase/auth';
@@ -19,6 +22,7 @@ import {
   auth,
   buildFirestoreErrorInfo,
   db,
+  googleProvider,
   handleFirestoreError,
 } from '../lib/firebase';
 import {
@@ -154,8 +158,17 @@ export function formatFirebaseAuthError(error: unknown): string {
   if (code === 'auth/invalid-email') {
     return 'Please enter a valid email address.';
   }
+  if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
+    return 'Google Sign-In was cancelled before completion.';
+  }
+  if (code === 'auth/unauthorized-domain') {
+    return 'Add this app domain to Firebase Console → Authentication → Settings → Authorized domains to enable Google Sign-In.';
+  }
+  if (code === 'auth/account-exists-with-different-credential') {
+    return 'An account already exists with this email using a different sign-in method.';
+  }
   if (code === 'auth/operation-not-allowed') {
-    return 'Email/Password sign-in is not enabled yet in your Firebase Console (Authentication → Sign-in method).';
+    return 'This sign-in provider is not enabled yet in Firebase Console (Authentication → Sign-in method).';
   }
   if (code === 'auth/too-many-requests') {
     return 'Too many attempts. Please wait a moment and try again.';
@@ -295,6 +308,65 @@ export async function signInTeamUserWithFirebase(
   const cred = await signInWithEmailAndPassword(auth, email, password);
   const profile = await fetchUserProfileFromFirestore(cred.user.uid);
   return { user: cred.user, profile };
+}
+
+function shouldFallbackToRedirect(error: unknown): boolean {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code ?? '')
+      : '';
+  return (
+    code === 'auth/popup-blocked' ||
+    code === 'auth/operation-not-supported-in-this-environment' ||
+    code === 'auth/internal-error'
+  );
+}
+
+function isStandaloneMobileOrTWA(): boolean {
+  if (typeof window === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  const isStandalone =
+    window.matchMedia?.('(display-mode: standalone)').matches ||
+    (window.navigator as unknown as { standalone?: boolean }).standalone === true;
+  const isWebView = /\bwv\b|Android.*Version\/[\d.]+/i.test(ua);
+  return Boolean(isWebView || (isStandalone && /Android|iPhone|iPad/i.test(ua)));
+}
+
+export async function signInTeamWithGoogle(): Promise<
+  | { redirected: true; user: null; profile: null }
+  | { redirected: false; user: User; profile: FirebaseUserProfile | null }
+> {
+  if (isStandaloneMobileOrTWA()) {
+    await signInWithRedirect(auth, googleProvider);
+    return { redirected: true, user: null, profile: null };
+  }
+
+  try {
+    const cred = await signInWithPopup(auth, googleProvider);
+    const profile = await fetchUserProfileFromFirestore(cred.user.uid);
+    return { redirected: false, user: cred.user, profile };
+  } catch (error) {
+    if (shouldFallbackToRedirect(error)) {
+      await signInWithRedirect(auth, googleProvider);
+      return { redirected: true, user: null, profile: null };
+    }
+    throw error;
+  }
+}
+
+export async function resolveGoogleRedirectResult(): Promise<{
+  user: User;
+  profile: FirebaseUserProfile | null;
+} | null> {
+  try {
+    const result = await getRedirectResult(auth);
+    if (!result?.user) return null;
+    const profile = await fetchUserProfileFromFirestore(result.user.uid);
+    return { user: result.user, profile };
+  } catch (error) {
+    console.warn('Google redirect sign-in check:', formatFirebaseAuthError(error));
+    return null;
+  }
 }
 
 export async function signOutTeamUserFromFirebase(): Promise<void> {

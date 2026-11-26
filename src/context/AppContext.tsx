@@ -39,6 +39,7 @@ import {
   getCachedFirebaseProfile,
   profileToTeamSession,
   registerTeamUserWithFirebase,
+  resolveGoogleRedirectResult,
   saveAreaChamber,
   saveAreaDoctor,
   saveAreaHospital,
@@ -46,11 +47,13 @@ import {
   saveAreaNote,
   saveUserAndAreaDocs,
   signInTeamUserWithFirebase,
+  signInTeamWithGoogle,
   signOutTeamUserFromFirebase,
   subscribeToAreaWorkspace,
 } from '../services/firebaseTeam';
 import {
   DEFAULT_API_URL,
+  DEFAULT_APPS_SCRIPT_URL,
   SHEET_PRIMARY_KEY,
   SuperAdminConfigSource,
   applyMutationLocally,
@@ -60,11 +63,11 @@ import {
   clearLegacyPendingGroupUpdates,
   clearTeamSession,
   fetchAllDataFromAppsScript,
-  fetchPublicConfigFromServer,
   fetchSuperAdminStatus,
   getLastSyncTime,
   getSavedActiveMpoId,
   getSavedApiUrl,
+  getSavedSuperAdminSession,
   getSavedTeamPin,
   getSavedTeamSession,
   getSavedTheme,
@@ -80,7 +83,6 @@ import {
   saveApiUrl,
   saveCachedDataset,
   saveLastSyncTime,
-  saveServerDefaultApiUrl,
   saveSyncQueue,
   saveTeamPin,
   saveTeamSession,
@@ -126,10 +128,12 @@ interface AppContextValue {
   teamSession: TeamSession | null;
   firebaseAuthReady: boolean;
   firebaseUserEmail: string | null;
+  firebaseUserName: string | null;
   needsFirebaseAreaSetup: boolean;
   firebaseSyncError: string | null;
   areaNotes: AreaNote[];
   teamPinConfigured: boolean;
+  loginTeamWithGoogle: () => Promise<{ ok: boolean; redirected?: boolean; error?: string }>;
   loginTeamWithFirebase: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   registerTeamWithFirebase: (
     input: TeamRegistrationInput
@@ -292,8 +296,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [teamPinConfigured, setTeamPinConfigured] = useState<boolean>(() =>
     Boolean(getSavedTeamPin())
   );
-  // Super Admin Bearer token is held exclusively in React memory (never localStorage/sessionStorage)
-  const [superAdminToken, setSuperAdminToken] = useState<string | null>(null);
+  // Client-verified Super Admin session persisted in sessionStorage (zero /api/ dependency)
+  const [superAdminToken, setSuperAdminToken] = useState<string | null>(
+    () => getSavedSuperAdminSession()?.token ?? null
+  );
   const [superAdminSource, setSuperAdminSource] = useState<SuperAdminConfigSource | 'loading'>(
     'loading'
   );
@@ -433,9 +439,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     void testFirestoreConnection();
   }, []);
 
-  // Firebase Auth listener — keeps Team users signed in offline automatically without ever gating Public Dashboard
+  // Firebase Auth listener + Google redirect completion — keeps Team users signed in offline automatically
   useEffect(() => {
     let active = true;
+
+    void resolveGoogleRedirectResult().then((redirected) => {
+      if (!active || !redirected) return;
+      if (redirected.profile) {
+        setFirebaseProfile(redirected.profile);
+        const session = profileToTeamSession(redirected.profile);
+        setTeamSession(session);
+        saveTeamSession(session);
+      }
+      setActiveTab('team');
+    });
+
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (!active) return;
       setFirebaseUser(user);
@@ -517,6 +535,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const needsFirebaseAreaSetup = Boolean(firebaseUser && firebaseAuthReady && !firebaseProfile);
 
   // Firebase Team Authentication handlers
+  const loginTeamWithGoogle = useCallback(async (): Promise<{
+    ok: boolean;
+    redirected?: boolean;
+    error?: string;
+  }> => {
+    try {
+      const result = await signInTeamWithGoogle();
+      if (result.redirected) {
+        return { ok: true, redirected: true };
+      }
+      if (result.profile) {
+        setFirebaseProfile(result.profile);
+        const session = profileToTeamSession(result.profile);
+        setTeamSession(session);
+        saveTeamSession(session);
+        pushToast({
+          type: 'success',
+          title: `Signed in to ${result.profile.areaName}`,
+          message: 'Private area workspace unlocked and cached for offline use.',
+        });
+      } else {
+        pushToast({
+          type: 'info',
+          title: 'Complete your Area Profile',
+          message: 'Enter your District and Upazila / Area Name to unlock your workspace.',
+        });
+      }
+      return { ok: true, redirected: false };
+    } catch (err) {
+      return { ok: false, error: formatFirebaseAuthError(err) };
+    }
+  }, [pushToast]);
+
   const loginTeamWithFirebase = useCallback(
     async (email: string, password: string): Promise<{ ok: boolean; error?: string }> => {
       try {
@@ -913,68 +964,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       saveApiUrl(cleaned);
 
       const validUrl = isConfiguredApiUrl(cleaned);
-      if (superAdminToken) {
-        void saveServerDefaultApiUrl(superAdminToken, validUrl ? cleaned : '').then((res) => {
-          if (res.ok && validUrl) {
-            pushToast({
-              type: 'success',
-              title: 'Web App URL saved & published',
-              message: 'Public and team users will automatically sync live data from this endpoint.',
-            });
-          } else {
-            pushToast({
-              type: 'success',
-              title: 'Web App URL saved',
-              message: validUrl
-                ? 'Saved locally on this device.'
-                : 'Reverted to default endpoint.',
-            });
-          }
-        });
-        return;
-      }
-
       pushToast({
         type: 'success',
         title: 'Web App URL saved',
         message: validUrl
-          ? 'Ready to sync with Google Apps Script.'
-          : 'Reverted to default placeholder URL.',
+          ? 'Ready to sync directly with Google Sheets.'
+          : 'Reverted to default endpoint.',
       });
     },
-    [pushToast, superAdminToken]
+    [pushToast]
   );
 
-  // Hydrate built-in default endpoint from server config on startup so public users get zero-setup auto-sync
+  // Hydrate built-in DEFAULT_APPS_SCRIPT_URL directly on client (zero /api/ dependency)
   useEffect(() => {
-    let cancelled = false;
-    const hydrateDefaultEndpoint = async () => {
-      const cfg = await fetchPublicConfigFromServer();
-      if (cancelled) return;
-      if (cfg.defaultApiUrl && isConfiguredApiUrl(cfg.defaultApiUrl)) {
-        setApiUrl((prev) => {
-          if (isConfiguredApiUrl(prev)) return prev;
-          saveApiUrl(cfg.defaultApiUrl);
-          return cfg.defaultApiUrl;
-        });
-      }
-    };
-    void hydrateDefaultEndpoint();
-    return () => {
-      cancelled = true;
-    };
+    if (isConfiguredApiUrl(DEFAULT_APPS_SCRIPT_URL)) {
+      setApiUrl((prev) => {
+        if (isConfiguredApiUrl(prev)) return prev;
+        saveApiUrl(DEFAULT_APPS_SCRIPT_URL);
+        return DEFAULT_APPS_SCRIPT_URL;
+      });
+    }
   }, []);
 
   const refreshFromServer = useCallback(
     async (silent = false): Promise<boolean> => {
       let targetUrl = apiUrl;
-      if (!isConfiguredApiUrl(targetUrl)) {
-        const cfg = await fetchPublicConfigFromServer();
-        if (cfg.defaultApiUrl && isConfiguredApiUrl(cfg.defaultApiUrl)) {
-          targetUrl = cfg.defaultApiUrl;
-          setApiUrl(targetUrl);
-          saveApiUrl(targetUrl);
-        }
+      if (!isConfiguredApiUrl(targetUrl) && isConfiguredApiUrl(DEFAULT_APPS_SCRIPT_URL)) {
+        targetUrl = DEFAULT_APPS_SCRIPT_URL;
+        setApiUrl(targetUrl);
+        saveApiUrl(targetUrl);
       }
 
       if (!isConfiguredApiUrl(targetUrl)) {
@@ -982,7 +1000,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           pushToast({
             type: 'info',
             title: 'Up to date (offline cache)',
-            message: 'Using cached local data. Live sync endpoint is managed by Super Admin.',
+            message: 'Configure your Google Apps Script Web App URL in Settings → Super Admin.',
           });
         }
         return false;
@@ -1592,10 +1610,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     teamSession,
     firebaseAuthReady,
     firebaseUserEmail: firebaseUser?.email ?? null,
+    firebaseUserName: firebaseUser?.displayName ?? null,
     needsFirebaseAreaSetup,
     firebaseSyncError,
     areaNotes,
     teamPinConfigured,
+    loginTeamWithGoogle,
     loginTeamWithFirebase,
     registerTeamWithFirebase,
     completeFirebaseAreaProfile,
