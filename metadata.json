@@ -1,0 +1,8 @@
+{
+  "name": "Medical Field Assistant – DI",
+  "description": "Mobile-first MPO Management System for Medical Promotion Officers of Drug International Limited, Bangladesh with offline-first sync and Google Apps Script integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

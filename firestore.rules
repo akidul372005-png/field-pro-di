@@ -1,0 +1,245 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 2 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidAreaId(id) {
+      return id is string && id.size() >= 2 && id.size() <= 64 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isOptString(data, field, maxLen) {
+      return !(field in data) || (data[field] is string && data[field].size() <= maxLen);
+    }
+
+    function isReqString(data, field, minLen, maxLen) {
+      return field in data && data[field] is string && data[field].size() >= minLen && data[field].size() <= maxLen;
+    }
+
+    function userProfileExists() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isMemberOfArea(areaId) {
+      return userProfileExists() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.areaId == areaId;
+    }
+
+    function isValidUserProfile(data, uid) {
+      return data.keys().hasAll(['uid', 'email', 'officerName', 'areaId', 'areaName']) &&
+        data.keys().hasOnly([
+          'uid', 'email', 'officerName', 'role', 'employeeCode', 'phone',
+          'areaId', 'areaName', 'district', 'upazila', 'createdAt', 'updatedAt'
+        ]) &&
+        data.uid == uid &&
+        isReqString(data, 'email', 3, 160) &&
+        isReqString(data, 'officerName', 1, 120) &&
+        isValidAreaId(data.areaId) &&
+        isReqString(data, 'areaName', 1, 120) &&
+        isOptString(data, 'role', 60) &&
+        isOptString(data, 'employeeCode', 40) &&
+        isOptString(data, 'phone', 40) &&
+        isOptString(data, 'district', 80) &&
+        isOptString(data, 'upazila', 80) &&
+        isOptString(data, 'createdAt', 64) &&
+        isOptString(data, 'updatedAt', 64);
+    }
+
+    function isValidAreaWorkspace(data, areaId) {
+      return data.keys().hasAll(['areaId', 'areaName', 'updatedBy']) &&
+        data.keys().hasOnly([
+          'areaId', 'areaName', 'district', 'upazila', 'updatedBy', 'createdAt', 'updatedAt'
+        ]) &&
+        data.areaId == areaId &&
+        data.updatedBy == request.auth.uid &&
+        isReqString(data, 'areaName', 1, 120) &&
+        isOptString(data, 'district', 80) &&
+        isOptString(data, 'upazila', 80) &&
+        isOptString(data, 'createdAt', 64) &&
+        isOptString(data, 'updatedAt', 64);
+    }
+
+    function isValidAreaDoctor(data, areaId) {
+      return data.keys().hasAll(['Doctor_ID', 'Doctor_Name', 'Area_ID', 'updatedBy']) &&
+        data.keys().hasOnly([
+          'Doctor_ID', 'Doctor_Name', 'Degree', 'Specialty', 'Department_ID',
+          'Primary_Hospital_ID', 'Area_ID', 'Phone', 'Email', 'Category',
+          'Doctor_Type', 'Visiting_Days', 'Visiting_Hours', 'Remarks',
+          'Status', 'updatedAt', 'updatedBy'
+        ]) &&
+        isValidId(data.Doctor_ID) &&
+        isReqString(data, 'Doctor_Name', 1, 160) &&
+        data.Area_ID == areaId &&
+        data.updatedBy == request.auth.uid &&
+        isOptString(data, 'Degree', 160) &&
+        isOptString(data, 'Specialty', 120) &&
+        isOptString(data, 'Department_ID', 80) &&
+        isOptString(data, 'Primary_Hospital_ID', 80) &&
+        isOptString(data, 'Phone', 40) &&
+        isOptString(data, 'Email', 160) &&
+        isOptString(data, 'Category', 40) &&
+        isOptString(data, 'Doctor_Type', 30) &&
+        isOptString(data, 'Visiting_Days', 120) &&
+        isOptString(data, 'Visiting_Hours', 120) &&
+        isOptString(data, 'Remarks', 1500) &&
+        isOptString(data, 'Status', 20) &&
+        isOptString(data, 'updatedAt', 64);
+    }
+
+    function isValidAreaChamber(data, areaId) {
+      return data.keys().hasAll(['Chamber_ID', 'Chamber_Name', 'Area_ID', 'updatedBy']) &&
+        data.keys().hasOnly([
+          'Chamber_ID', 'Doctor_ID', 'Chamber_Name', 'Address', 'Area_ID',
+          'Visiting_Days', 'Visiting_Hours', 'Assistant_Phone', 'Status',
+          'updatedAt', 'updatedBy'
+        ]) &&
+        isValidId(data.Chamber_ID) &&
+        isReqString(data, 'Chamber_Name', 1, 160) &&
+        data.Area_ID == areaId &&
+        data.updatedBy == request.auth.uid &&
+        isOptString(data, 'Doctor_ID', 80) &&
+        isOptString(data, 'Address', 300) &&
+        isOptString(data, 'Visiting_Days', 120) &&
+        isOptString(data, 'Visiting_Hours', 120) &&
+        isOptString(data, 'Assistant_Phone', 40) &&
+        isOptString(data, 'Status', 20) &&
+        isOptString(data, 'updatedAt', 64);
+    }
+
+    function isValidAreaHospital(data, areaId) {
+      return data.keys().hasAll(['Hospital_ID', 'Hospital_Name', 'Area_ID', 'updatedBy']) &&
+        data.keys().hasOnly([
+          'Hospital_ID', 'Hospital_Name', 'Area_ID', 'Hospital_Type',
+          'Address', 'Phone', 'Status', 'updatedAt', 'updatedBy'
+        ]) &&
+        isValidId(data.Hospital_ID) &&
+        isReqString(data, 'Hospital_Name', 1, 180) &&
+        data.Area_ID == areaId &&
+        data.updatedBy == request.auth.uid &&
+        isOptString(data, 'Hospital_Type', 80) &&
+        isOptString(data, 'Address', 300) &&
+        isOptString(data, 'Phone', 40) &&
+        isOptString(data, 'Status', 20) &&
+        isOptString(data, 'updatedAt', 64);
+    }
+
+    function isValidAreaMember(data, areaId) {
+      return data.keys().hasAll(['MPO_ID', 'MPO_Name', 'Area_ID', 'updatedBy']) &&
+        data.keys().hasOnly([
+          'MPO_ID', 'MPO_Name', 'Role', 'Designation', 'Employee_ID',
+          'Employee_Code', 'Area_ID', 'Area', 'Territory', 'Phone_Number',
+          'Phone', 'Email', 'Status', 'updatedAt', 'updatedBy'
+        ]) &&
+        isValidId(data.MPO_ID) &&
+        isReqString(data, 'MPO_Name', 1, 120) &&
+        data.Area_ID == areaId &&
+        data.updatedBy == request.auth.uid &&
+        isOptString(data, 'Role', 60) &&
+        isOptString(data, 'Designation', 60) &&
+        isOptString(data, 'Employee_ID', 40) &&
+        isOptString(data, 'Employee_Code', 40) &&
+        isOptString(data, 'Area', 120) &&
+        isOptString(data, 'Territory', 120) &&
+        isOptString(data, 'Phone_Number', 40) &&
+        isOptString(data, 'Phone', 40) &&
+        isOptString(data, 'Email', 160) &&
+        isOptString(data, 'Status', 20) &&
+        isOptString(data, 'updatedAt', 64);
+    }
+
+    function isValidAreaNote(data, areaId) {
+      return data.keys().hasAll(['Note_ID', 'Area_ID', 'Title', 'Content', 'Author_UID']) &&
+        data.keys().hasOnly([
+          'Note_ID', 'Area_ID', 'Title', 'Content', 'Category',
+          'Pinned', 'Author_Name', 'Author_UID', 'Created_At', 'Updated_At'
+        ]) &&
+        isValidId(data.Note_ID) &&
+        data.Area_ID == areaId &&
+        isReqString(data, 'Title', 1, 140) &&
+        isReqString(data, 'Content', 1, 3000) &&
+        data.Author_UID == request.auth.uid &&
+        isOptString(data, 'Category', 40) &&
+        (!('Pinned' in data) || data.Pinned is bool) &&
+        isOptString(data, 'Author_Name', 120) &&
+        isOptString(data, 'Created_At', 64) &&
+        isOptString(data, 'Updated_At', 64);
+    }
+
+    // Strict PII isolation: each authenticated officer can read/write ONLY their own users/{uid} doc
+    match /users/{uid} {
+      allow get: if isOwner(uid) && isValidId(uid);
+      allow list: if false;
+      allow create: if isOwner(uid) && isValidId(uid) && isValidUserProfile(request.resource.data, uid);
+      allow update: if isOwner(uid) && isValidId(uid) &&
+        isValidUserProfile(request.resource.data, uid) &&
+        request.resource.data.uid == resource.data.uid;
+      allow delete: if isOwner(uid) && isValidId(uid);
+    }
+
+    // Area workspace + strictly area-scoped private subcollections
+    match /areas/{areaId} {
+      allow get: if isValidAreaId(areaId) && isMemberOfArea(areaId);
+      allow list: if false;
+      allow create, update: if isValidAreaId(areaId) &&
+        isMemberOfArea(areaId) &&
+        isValidAreaWorkspace(request.resource.data, areaId);
+      allow delete: if false;
+
+      match /doctors/{doctorId} {
+        allow get: if isValidAreaId(areaId) && isValidId(doctorId) && isMemberOfArea(areaId);
+        allow list: if isValidAreaId(areaId) && isMemberOfArea(areaId);
+        allow create, update: if isValidAreaId(areaId) && isValidId(doctorId) &&
+          isMemberOfArea(areaId) && isValidAreaDoctor(request.resource.data, areaId);
+        allow delete: if isValidAreaId(areaId) && isValidId(doctorId) && isMemberOfArea(areaId);
+      }
+
+      match /chambers/{chamberId} {
+        allow get: if isValidAreaId(areaId) && isValidId(chamberId) && isMemberOfArea(areaId);
+        allow list: if isValidAreaId(areaId) && isMemberOfArea(areaId);
+        allow create, update: if isValidAreaId(areaId) && isValidId(chamberId) &&
+          isMemberOfArea(areaId) && isValidAreaChamber(request.resource.data, areaId);
+        allow delete: if isValidAreaId(areaId) && isValidId(chamberId) && isMemberOfArea(areaId);
+      }
+
+      match /hospitals/{hospitalId} {
+        allow get: if isValidAreaId(areaId) && isValidId(hospitalId) && isMemberOfArea(areaId);
+        allow list: if isValidAreaId(areaId) && isMemberOfArea(areaId);
+        allow create, update: if isValidAreaId(areaId) && isValidId(hospitalId) &&
+          isMemberOfArea(areaId) && isValidAreaHospital(request.resource.data, areaId);
+        allow delete: if isValidAreaId(areaId) && isValidId(hospitalId) && isMemberOfArea(areaId);
+      }
+
+      match /members/{memberId} {
+        allow get: if isValidAreaId(areaId) && isValidId(memberId) && isMemberOfArea(areaId);
+        allow list: if isValidAreaId(areaId) && isMemberOfArea(areaId);
+        allow create, update: if isValidAreaId(areaId) && isValidId(memberId) &&
+          isMemberOfArea(areaId) && isValidAreaMember(request.resource.data, areaId);
+        allow delete: if isValidAreaId(areaId) && isValidId(memberId) && isMemberOfArea(areaId);
+      }
+
+      match /notes/{noteId} {
+        allow get: if isValidAreaId(areaId) && isValidId(noteId) && isMemberOfArea(areaId);
+        allow list: if isValidAreaId(areaId) && isMemberOfArea(areaId);
+        allow create, update: if isValidAreaId(areaId) && isValidId(noteId) &&
+          isMemberOfArea(areaId) && isValidAreaNote(request.resource.data, areaId);
+        allow delete: if isValidAreaId(areaId) && isValidId(noteId) && isMemberOfArea(areaId);
+      }
+    }
+
+    // Deny all other paths by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

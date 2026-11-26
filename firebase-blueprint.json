@@ -1,0 +1,171 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "Team User Profile",
+      "description": "Authenticated field officer profile linking Firebase UID to an assigned private territory areaId.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 160 },
+        "officerName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "role": { "type": "string", "maxLength": 60 },
+        "employeeCode": { "type": "string", "maxLength": 40 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "areaId": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "areaName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "district": { "type": "string", "maxLength": 80 },
+        "upazila": { "type": "string", "maxLength": 80 },
+        "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "updatedAt": { "type": "string", "format": "date-time", "maxLength": 64 }
+      },
+      "required": ["uid", "email", "officerName", "areaId", "areaName"]
+    },
+    "AreaWorkspace": {
+      "title": "Area Workspace",
+      "description": "Territory metadata record for an area-scoped private Team workspace.",
+      "type": "object",
+      "properties": {
+        "areaId": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "areaName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "district": { "type": "string", "maxLength": 80 },
+        "upazila": { "type": "string", "maxLength": 80 },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time", "maxLength": 64 },
+        "updatedAt": { "type": "string", "format": "date-time", "maxLength": 64 }
+      },
+      "required": ["areaId", "areaName", "updatedBy"]
+    },
+    "AreaDoctor": {
+      "title": "Area Doctor",
+      "description": "Private doctor record scoped strictly to an areaId.",
+      "type": "object",
+      "properties": {
+        "Doctor_ID": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "Doctor_Name": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "Degree": { "type": "string", "maxLength": 160 },
+        "Specialty": { "type": "string", "maxLength": 120 },
+        "Department_ID": { "type": "string", "maxLength": 80 },
+        "Primary_Hospital_ID": { "type": "string", "maxLength": 80 },
+        "Area_ID": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "Phone": { "type": "string", "maxLength": 40 },
+        "Email": { "type": "string", "maxLength": 160 },
+        "Category": { "type": "string", "maxLength": 40 },
+        "Doctor_Type": { "type": "string", "maxLength": 30 },
+        "Visiting_Days": { "type": "string", "maxLength": 120 },
+        "Visiting_Hours": { "type": "string", "maxLength": 120 },
+        "Remarks": { "type": "string", "maxLength": 1500 },
+        "Status": { "type": "string", "maxLength": 20 },
+        "updatedAt": { "type": "string", "maxLength": 64 },
+        "updatedBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["Doctor_ID", "Doctor_Name", "Area_ID", "updatedBy"]
+    },
+    "AreaChamber": {
+      "title": "Area Chamber",
+      "description": "Private chamber schedule linked to an area doctor.",
+      "type": "object",
+      "properties": {
+        "Chamber_ID": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "Doctor_ID": { "type": "string", "maxLength": 80 },
+        "Chamber_Name": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "Address": { "type": "string", "maxLength": 300 },
+        "Area_ID": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "Visiting_Days": { "type": "string", "maxLength": 120 },
+        "Visiting_Hours": { "type": "string", "maxLength": 120 },
+        "Assistant_Phone": { "type": "string", "maxLength": 40 },
+        "Status": { "type": "string", "maxLength": 20 },
+        "updatedAt": { "type": "string", "maxLength": 64 },
+        "updatedBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["Chamber_ID", "Chamber_Name", "Area_ID", "updatedBy"]
+    },
+    "AreaHospital": {
+      "title": "Area Hospital",
+      "description": "Private hospital or diagnostic center record scoped to an areaId.",
+      "type": "object",
+      "properties": {
+        "Hospital_ID": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "Hospital_Name": { "type": "string", "minLength": 1, "maxLength": 180 },
+        "Area_ID": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "Hospital_Type": { "type": "string", "maxLength": 80 },
+        "Address": { "type": "string", "maxLength": 300 },
+        "Phone": { "type": "string", "maxLength": 40 },
+        "Status": { "type": "string", "maxLength": 20 },
+        "updatedAt": { "type": "string", "maxLength": 64 },
+        "updatedBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["Hospital_ID", "Hospital_Name", "Area_ID", "updatedBy"]
+    },
+    "AreaMember": {
+      "title": "Area Team Member",
+      "description": "Field officer directory entry within an area workspace.",
+      "type": "object",
+      "properties": {
+        "MPO_ID": { "type": "string", "maxLength": 128 },
+        "MPO_Name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "Role": { "type": "string", "maxLength": 60 },
+        "Designation": { "type": "string", "maxLength": 60 },
+        "Employee_ID": { "type": "string", "maxLength": 40 },
+        "Employee_Code": { "type": "string", "maxLength": 40 },
+        "Area_ID": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "Area": { "type": "string", "maxLength": 120 },
+        "Territory": { "type": "string", "maxLength": 120 },
+        "Phone_Number": { "type": "string", "maxLength": 40 },
+        "Phone": { "type": "string", "maxLength": 40 },
+        "Email": { "type": "string", "maxLength": 160 },
+        "Status": { "type": "string", "maxLength": 20 },
+        "updatedAt": { "type": "string", "maxLength": 64 },
+        "updatedBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["MPO_ID", "MPO_Name", "Area_ID", "updatedBy"]
+    },
+    "AreaNote": {
+      "title": "Area Note",
+      "description": "Private territory field note shared among officers in the same areaId.",
+      "type": "object",
+      "properties": {
+        "Note_ID": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "Area_ID": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "Title": { "type": "string", "minLength": 1, "maxLength": 140 },
+        "Content": { "type": "string", "minLength": 1, "maxLength": 3000 },
+        "Category": { "type": "string", "maxLength": 40 },
+        "Pinned": { "type": "boolean" },
+        "Author_Name": { "type": "string", "maxLength": 120 },
+        "Author_UID": { "type": "string", "maxLength": 128 },
+        "Created_At": { "type": "string", "maxLength": 64 },
+        "Updated_At": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["Note_ID", "Area_ID", "Title", "Content", "Author_UID"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Private officer profile mapping UID to assigned areaId."
+    },
+    "/areas/{areaId}": {
+      "schema": { "$ref": "#/entities/AreaWorkspace" },
+      "description": "Territory metadata document for an area workspace."
+    },
+    "/areas/{areaId}/doctors/{doctorId}": {
+      "schema": { "$ref": "#/entities/AreaDoctor" },
+      "description": "Area-scoped private Doctors directory."
+    },
+    "/areas/{areaId}/chambers/{chamberId}": {
+      "schema": { "$ref": "#/entities/AreaChamber" },
+      "description": "Area-scoped private Chambers directory."
+    },
+    "/areas/{areaId}/hospitals/{hospitalId}": {
+      "schema": { "$ref": "#/entities/AreaHospital" },
+      "description": "Area-scoped private Hospitals directory."
+    },
+    "/areas/{areaId}/members/{memberId}": {
+      "schema": { "$ref": "#/entities/AreaMember" },
+      "description": "Area-scoped Team Officers directory."
+    },
+    "/areas/{areaId}/notes/{noteId}": {
+      "schema": { "$ref": "#/entities/AreaNote" },
+      "description": "Area-scoped private Field Notes."
+    }
+  }
+}
