@@ -26,8 +26,10 @@ export interface TeamSession {
   loginMode: 'firebase' | 'area' | 'mpo';
   uid?: string;
   email?: string;
+  phone?: string;
   areaId: string;
   areaName: string;
+  joinCode?: string;
   district: string;
   upazila?: string;
   zone: string;
@@ -42,16 +44,48 @@ export interface TeamSession {
 export interface FirebaseUserProfile {
   uid: string;
   email: string;
+  emailLower?: string;
   officerName: string;
   role: string;
   employeeCode?: string;
   phone?: string;
+  phoneNormalized?: string;
   areaId: string;
   areaName: string;
+  joinCode?: string;
   district: string;
   upazila: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TeamInvite {
+  inviteId: string;
+  toUid: string;
+  toEmail: string;
+  toPhone?: string;
+  toName?: string;
+  fromUid: string;
+  fromName: string;
+  areaId: string;
+  areaName: string;
+  district?: string;
+  upazila?: string;
+  joinCode: string;
+  status: 'pending' | 'accepted' | 'declined';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface OfficerSearchResult {
+  uid: string;
+  officerName: string;
+  email: string;
+  phone?: string;
+  role?: string;
+  areaId: string;
+  areaName: string;
+  district?: string;
 }
 
 export interface AreaNote {

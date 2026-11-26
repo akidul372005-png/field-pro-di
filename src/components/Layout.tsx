@@ -53,6 +53,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     navigateHome,
     currentUser,
     teamSession,
+    pendingInvites,
     isSuperAdmin,
     theme,
     toggleTheme,
@@ -244,7 +245,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                 setActiveTab('team');
                 window.scrollTo({ top: 0, behavior: 'auto' });
               }}
-              className={`hidden md:inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl text-sm font-semibold whitespace-nowrap shrink-0 transition-colors active:scale-[0.98] cursor-pointer ${
+              className={`relative hidden md:inline-flex items-center gap-1.5 min-h-[40px] px-3.5 rounded-xl text-sm font-semibold whitespace-nowrap shrink-0 transition-colors active:scale-[0.98] cursor-pointer ${
                 activeTab === 'team'
                   ? 'bg-[#149A99] text-white'
                   : 'bg-[#0E7C7B] hover:bg-[#149A99] text-white'
@@ -258,6 +259,14 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
               <span className="max-w-[130px] truncate">
                 {teamSession?.areaName || currentUser?.displayName || (currentUser ? 'Team Area' : 'Team Login')}
               </span>
+              {pendingInvites.length > 0 && (
+                <span
+                  aria-label={`${pendingInvites.length} pending team invites`}
+                  className="ml-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold inline-flex items-center justify-center leading-none"
+                >
+                  {pendingInvites.length}
+                </span>
+              )}
             </button>
           </div>
         </div>
@@ -368,7 +377,17 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                     : 'text-[#4B5E73] dark:text-slate-400 hover:text-[#0D2B45] dark:hover:text-white font-medium'
                 }`}
               >
-                <Icon className="w-[21px] h-[21px]" />
+                <span className="relative inline-flex items-center justify-center">
+                  <Icon className="w-[21px] h-[21px]" />
+                  {tab.id === 'team' && pendingInvites.length > 0 && (
+                    <span
+                      aria-label={`${pendingInvites.length} pending team invites`}
+                      className="absolute -top-1.5 -right-2.5 min-w-[16px] h-[16px] px-1 rounded-full bg-rose-600 text-white text-[9.5px] font-bold inline-flex items-center justify-center leading-none shadow-sm"
+                    >
+                      {pendingInvites.length}
+                    </span>
+                  )}
+                </span>
                 <span className="text-[11px] leading-none tracking-tight whitespace-nowrap">
                   {tab.label}
                 </span>

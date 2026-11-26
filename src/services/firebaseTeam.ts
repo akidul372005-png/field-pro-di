@@ -14,8 +14,12 @@ import {
   deleteDoc,
   doc,
   getDoc,
+  getDocs,
+  limit,
   onSnapshot,
+  query,
   setDoc,
+  where,
 } from 'firebase/firestore';
 import {
   OperationType,
@@ -32,6 +36,8 @@ import {
   FirebaseUserProfile,
   Hospital,
   MPOUser,
+  OfficerSearchResult,
+  TeamInvite,
   TeamSession,
 } from '../types';
 
@@ -78,6 +84,33 @@ export function buildAreaIdSlug(
   return slug.length >= 3 ? slug : `area-${Date.now().toString(36)}`;
 }
 
+export function normalizePhoneDigits(raw: string): string {
+  return String(raw ?? '').replace(/[^0-9]/g, '').slice(0, 20);
+}
+
+/**
+ * Generates a short, memorable Team Join Code like "DI-4829" deterministically from an areaId
+ * so existing and new areas always have a clean 4-digit shareable code.
+ */
+export function deriveAreaJoinCode(areaId: string): string {
+  const input = String(areaId || 'field-pro-di').trim().toLowerCase();
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i += 1) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  const num = 1000 + (Math.abs(hash) % 9000);
+  return `DI-${num}`;
+}
+
+export function normalizeJoinCodeInput(raw: string): string {
+  const cleaned = String(raw ?? '').trim().toUpperCase().replace(/\s+/g, '');
+  if (!cleaned) return '';
+  if (/^\d{4}$/.test(cleaned)) return `DI-${cleaned}`;
+  if (/^DI\d{4}$/.test(cleaned)) return `DI-${cleaned.slice(2)}`;
+  return cleaned;
+}
+
 export function getCachedFirebaseProfile(uid?: string | null): FirebaseUserProfile | null {
   try {
     const raw = localStorage.getItem(FIREBASE_PROFILE_CACHE_KEY);
@@ -85,15 +118,23 @@ export function getCachedFirebaseProfile(uid?: string | null): FirebaseUserProfi
     const parsed = JSON.parse(raw) as Partial<FirebaseUserProfile>;
     if (!parsed || !parsed.uid || !parsed.areaId) return null;
     if (uid && parsed.uid !== uid) return null;
+    const areaId = String(parsed.areaId);
     return {
       uid: String(parsed.uid),
       email: String(parsed.email || ''),
+      emailLower: String(parsed.emailLower || parsed.email || '').toLowerCase(),
       officerName: String(parsed.officerName || 'Field Officer'),
       role: String(parsed.role || 'MPO'),
       employeeCode: parsed.employeeCode ? String(parsed.employeeCode) : undefined,
       phone: parsed.phone ? String(parsed.phone) : undefined,
-      areaId: String(parsed.areaId),
-      areaName: String(parsed.areaName || parsed.areaId),
+      phoneNormalized: parsed.phoneNormalized
+        ? String(parsed.phoneNormalized)
+        : parsed.phone
+          ? normalizePhoneDigits(String(parsed.phone))
+          : undefined,
+      areaId,
+      areaName: String(parsed.areaName || areaId),
+      joinCode: parsed.joinCode ? String(parsed.joinCode) : deriveAreaJoinCode(areaId),
       district: String(parsed.district || ''),
       upazila: String(parsed.upazila || ''),
       createdAt: String(parsed.createdAt || new Date().toISOString()),
@@ -125,8 +166,10 @@ export function profileToTeamSession(profile: FirebaseUserProfile): TeamSession 
     loginMode: 'firebase',
     uid: profile.uid,
     email: profile.email,
+    phone: profile.phone,
     areaId: profile.areaId,
     areaName: profile.areaName,
+    joinCode: profile.joinCode || deriveAreaJoinCode(profile.areaId),
     district: profile.district,
     upazila: profile.upazila,
     zone: profile.upazila || profile.district,
@@ -142,44 +185,58 @@ export function profileToTeamSession(profile: FirebaseUserProfile): TeamSession 
 export function formatFirebaseAuthError(error: unknown): string {
   const code =
     typeof error === 'object' && error !== null && 'code' in error
-      ? String((error as { code?: unknown }).code ?? '')
+      ? String((error as { code?: unknown }).code ?? '').trim()
       : '';
-  const msg = error instanceof Error ? error.message : String(error ?? '');
+  const msg = error instanceof Error ? error.message.trim() : String(error ?? '').trim();
+  const detail = [code, msg && !msg.includes(code) ? msg : ''].filter(Boolean).join(' — ');
+  const withDetail = (friendly: string) =>
+    code || msg ? `${friendly} [${detail || code || msg}]` : friendly;
 
   if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') {
-    return 'Incorrect email or password. Please check your credentials and try again.';
+    return withDetail('Incorrect email or password. Please check your credentials and try again.');
   }
   if (code === 'auth/email-already-in-use') {
-    return 'An account with this email already exists. Switch to Sign In instead.';
+    return withDetail('An account with this email already exists. Switch to Sign In instead.');
   }
   if (code === 'auth/weak-password') {
-    return 'Password must be at least 6 characters long.';
+    return withDetail('Password must be at least 6 characters long.');
   }
   if (code === 'auth/invalid-email') {
-    return 'Please enter a valid email address.';
+    return withDetail('Please enter a valid email address.');
   }
   if (code === 'auth/popup-closed-by-user' || code === 'auth/cancelled-popup-request') {
-    return 'Google Sign-In was cancelled before completion.';
+    return withDetail('Google Sign-In popup was closed before completion.');
   }
   if (code === 'auth/unauthorized-domain') {
-    return 'Add this app domain to Firebase Console → Authentication → Settings → Authorized domains to enable Google Sign-In.';
+    return withDetail(
+      'Add this domain to Firebase Console → Authentication → Settings → Authorized domains.'
+    );
   }
   if (code === 'auth/account-exists-with-different-credential') {
-    return 'An account already exists with this email using a different sign-in method.';
+    return withDetail('An account already exists with this email using a different sign-in method.');
   }
   if (code === 'auth/operation-not-allowed') {
-    return 'This sign-in provider is not enabled yet in Firebase Console (Authentication → Sign-in method).';
+    return withDetail(
+      'This sign-in provider is not enabled in Firebase Console (Authentication → Sign-in method).'
+    );
   }
   if (code === 'auth/too-many-requests') {
-    return 'Too many attempts. Please wait a moment and try again.';
+    return withDetail('Too many attempts. Please wait a moment and try again.');
   }
   if (code === 'auth/network-request-failed') {
-    return 'Network unavailable. Connect to the internet once to sign in—afterward your session works offline.';
+    return withDetail(
+      'Network unavailable. Connect to the internet once to sign in—afterward your session works offline.'
+    );
   }
   if (msg.toLowerCase().includes('missing or insufficient permissions')) {
-    return 'Firestore permission denied. Publish the firestore.rules file in your Firebase Console to allow area-scoped Team access.';
+    return withDetail(
+      'Firestore permission denied. Publish firestore.rules in Firebase Console to allow area-scoped Team access.'
+    );
   }
-  return msg || 'Authentication failed. Please try again.';
+  if (code && msg) {
+    return msg.includes(code) ? msg : `${code}: ${msg}`;
+  }
+  return msg || code || 'Authentication failed. Please try again.';
 }
 
 export interface TeamRegistrationInput {
@@ -197,7 +254,7 @@ export interface TeamRegistrationInput {
 
 export async function saveUserAndAreaDocs(
   user: User,
-  input: Omit<TeamRegistrationInput, 'email' | 'password'>
+  input: Omit<TeamRegistrationInput, 'email' | 'password'> & { joinCode?: string }
 ): Promise<FirebaseUserProfile> {
   const now = new Date().toISOString();
   const officerName = clampString(input.officerName, 120) || user.displayName || 'Field Officer';
@@ -206,18 +263,24 @@ export async function saveUserAndAreaDocs(
   const upazila = clampString(input.upazila, 80);
   const areaName = clampString(input.areaName, 120);
   const phone = clampString(input.phone, 40);
+  const phoneNormalized = phone ? normalizePhoneDigits(phone) : '';
   const employeeCode = clampString(input.employeeCode, 40);
   const areaId = buildAreaIdSlug(district, upazila, areaName, input.customAreaId);
+  const joinCode = normalizeJoinCodeInput(input.joinCode || '') || deriveAreaJoinCode(areaId);
+  const email = clampString(user.email, 160);
+  const emailLower = email.toLowerCase();
 
   const profile: FirebaseUserProfile = {
     uid: user.uid,
-    email: clampString(user.email, 160),
+    email,
+    ...(emailLower ? { emailLower } : {}),
     officerName,
     role,
     ...(employeeCode ? { employeeCode } : {}),
-    ...(phone ? { phone } : {}),
+    ...(phone ? { phone, phoneNormalized } : {}),
     areaId,
     areaName,
+    joinCode,
     district,
     upazila,
     createdAt: now,
@@ -234,7 +297,7 @@ export async function saveUserAndAreaDocs(
     handleFirestoreError(error, OperationType.WRITE, userPath);
   }
 
-  // 2. Create or update areas/{areaId}
+  // 2. Create or update areas/{areaId} with shareable joinCode
   const areaPath = `areas/${areaId}`;
   try {
     await setDoc(
@@ -242,6 +305,7 @@ export async function saveUserAndAreaDocs(
       {
         areaId,
         areaName,
+        joinCode,
         district,
         upazila,
         updatedBy: user.uid,
@@ -252,6 +316,25 @@ export async function saveUserAndAreaDocs(
     );
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, areaPath);
+  }
+
+  // 2b. Register short Join Code lookup doc joinCodes/{joinCode} (best-effort)
+  try {
+    await setDoc(
+      doc(db, 'joinCodes', joinCode),
+      {
+        joinCode,
+        areaId,
+        areaName,
+        district,
+        upazila,
+        updatedBy: user.uid,
+        updatedAt: now,
+      },
+      { merge: true }
+    );
+  } catch {
+    // Non-fatal if joinCodes rules are not yet published
   }
 
   // 3. Add officer into areas/{areaId}/members/{uid} so teammates appear in Team Directory
@@ -269,7 +352,7 @@ export async function saveUserAndAreaDocs(
       Territory: [district, upazila].filter(Boolean).join(' · '),
       Phone_Number: phone,
       Phone: phone,
-      Email: clampString(user.email, 160),
+      Email: email,
       Status: 'Active',
       updatedAt: now,
       updatedBy: user.uid,
@@ -317,32 +400,25 @@ function shouldFallbackToRedirect(error: unknown): boolean {
     typeof error === 'object' && error !== null && 'code' in error
       ? String((error as { code?: unknown }).code ?? '')
       : '';
+  const msg = error instanceof Error ? error.message.toLowerCase() : '';
   return (
     code === 'auth/popup-blocked' ||
     code === 'auth/operation-not-supported-in-this-environment' ||
-    code === 'auth/internal-error'
+    code === 'auth/internal-error' ||
+    code === 'auth/web-storage-unsupported' ||
+    msg.includes('popup') ||
+    msg.includes('blocked')
   );
 }
 
-function isStandaloneMobileOrTWA(): boolean {
-  if (typeof window === 'undefined') return false;
-  const ua = navigator.userAgent || '';
-  const isStandalone =
-    window.matchMedia?.('(display-mode: standalone)').matches ||
-    (window.navigator as unknown as { standalone?: boolean }).standalone === true;
-  const isWebView = /\bwv\b|Android.*Version\/[\d.]+/i.test(ua);
-  return Boolean(isWebView || (isStandalone && /Android|iPhone|iPad/i.test(ua)));
-}
-
+/**
+ * Always tries signInWithPopup first for immediate sign-in on desktop/mobile/TWA,
+ * and falls back automatically to signInWithRedirect if popup is blocked or unsupported.
+ */
 export async function signInTeamWithGoogle(): Promise<
   | { redirected: true; user: null; profile: null }
   | { redirected: false; user: User; profile: FirebaseUserProfile | null }
 > {
-  if (isStandaloneMobileOrTWA()) {
-    await signInWithRedirect(auth, googleProvider);
-    return { redirected: true, user: null, profile: null };
-  }
-
   try {
     const cred = await signInWithPopup(auth, googleProvider);
     const profile = await fetchUserProfileFromFirestore(cred.user.uid);
@@ -357,8 +433,9 @@ export async function signInTeamWithGoogle(): Promise<
 }
 
 export async function resolveGoogleRedirectResult(): Promise<{
-  user: User;
+  user: User | null;
   profile: FirebaseUserProfile | null;
+  error?: string;
 } | null> {
   try {
     const result = await getRedirectResult(auth);
@@ -366,8 +443,9 @@ export async function resolveGoogleRedirectResult(): Promise<{
     const profile = await fetchUserProfileFromFirestore(result.user.uid);
     return { user: result.user, profile };
   } catch (error) {
-    console.warn('Google redirect sign-in check:', formatFirebaseAuthError(error));
-    return null;
+    const formatted = formatFirebaseAuthError(error);
+    console.warn('Google redirect sign-in error:', formatted);
+    return { user: null, profile: null, error: formatted };
   }
 }
 
@@ -385,15 +463,26 @@ export async function fetchUserProfileFromFirestore(
     if (!snap.exists()) return null;
     const data = snap.data() as Partial<FirebaseUserProfile>;
     if (!data.areaId) return null;
+    const areaId = String(data.areaId);
+    const email = String(data.email || auth.currentUser?.email || '');
+    const phone = data.phone ? String(data.phone) : undefined;
+    const joinCode = data.joinCode ? String(data.joinCode) : deriveAreaJoinCode(areaId);
     const profile: FirebaseUserProfile = {
       uid,
-      email: String(data.email || auth.currentUser?.email || ''),
+      email,
+      emailLower: String(data.emailLower || email).toLowerCase(),
       officerName: String(data.officerName || auth.currentUser?.displayName || 'Field Officer'),
       role: String(data.role || 'MPO'),
       employeeCode: data.employeeCode ? String(data.employeeCode) : undefined,
-      phone: data.phone ? String(data.phone) : undefined,
-      areaId: String(data.areaId),
-      areaName: String(data.areaName || data.areaId),
+      phone,
+      phoneNormalized: data.phoneNormalized
+        ? String(data.phoneNormalized)
+        : phone
+          ? normalizePhoneDigits(phone)
+          : undefined,
+      areaId,
+      areaName: String(data.areaName || areaId),
+      joinCode,
       district: String(data.district || ''),
       upazila: String(data.upazila || ''),
       createdAt: String(data.createdAt || new Date().toISOString()),
@@ -828,4 +917,399 @@ export async function deleteAreaNote(areaId: string, noteId: string): Promise<vo
     OperationType.DELETE,
     path
   );
+}
+
+// =========================================================================
+// REAL TEAM INVITE & JOIN CODE SYSTEM (Firestore `invites` + `joinCodes`)
+// =========================================================================
+
+/**
+ * Ensures the signed-in officer's area has its shareable Join Code (e.g. DI-4829) registered
+ * in `areas/{areaId}` and `joinCodes/{joinCode}`, and that `emailLower`/`phoneNormalized` are indexed.
+ */
+export async function ensureAreaJoinCodeRegistered(profile: FirebaseUserProfile): Promise<void> {
+  const joinCode = profile.joinCode || deriveAreaJoinCode(profile.areaId);
+  const now = new Date().toISOString();
+  const emailLower = (profile.email || '').trim().toLowerCase();
+  const phoneNormalized = profile.phone ? normalizePhoneDigits(profile.phone) : '';
+
+  try {
+    await setDoc(
+      doc(db, 'users', profile.uid),
+      {
+        joinCode,
+        ...(emailLower ? { emailLower } : {}),
+        ...(phoneNormalized ? { phoneNormalized } : {}),
+      },
+      { merge: true }
+    );
+  } catch {
+    // Non-fatal background sync
+  }
+
+  try {
+    await setDoc(
+      doc(db, 'areas', profile.areaId),
+      {
+        areaId: profile.areaId,
+        areaName: profile.areaName,
+        joinCode,
+        district: profile.district || '',
+        upazila: profile.upazila || '',
+        updatedBy: profile.uid,
+        updatedAt: now,
+      },
+      { merge: true }
+    );
+  } catch {
+    // Non-fatal
+  }
+
+  try {
+    await setDoc(
+      doc(db, 'joinCodes', joinCode),
+      {
+        joinCode,
+        areaId: profile.areaId,
+        areaName: profile.areaName,
+        district: profile.district || '',
+        upazila: profile.upazila || '',
+        updatedBy: profile.uid,
+        updatedAt: now,
+      },
+      { merge: true }
+    );
+  } catch {
+    // Non-fatal
+  }
+}
+
+/**
+ * Searches registered officers in Firestore `users` collection by exact Email or Phone Number.
+ */
+export async function searchRegisteredOfficers(
+  searchInput: string,
+  excludeUid?: string
+): Promise<OfficerSearchResult[]> {
+  const raw = searchInput.trim();
+  if (!raw) return [];
+
+  const lower = raw.toLowerCase();
+  const digits = normalizePhoneDigits(raw);
+  const isEmailQuery = raw.includes('@');
+
+  const queries = [];
+  if (isEmailQuery) {
+    queries.push(query(collection(db, 'users'), where('email', '==', raw), limit(8)));
+    if (lower !== raw) {
+      queries.push(query(collection(db, 'users'), where('email', '==', lower), limit(8)));
+    }
+    queries.push(query(collection(db, 'users'), where('emailLower', '==', lower), limit(8)));
+  } else {
+    queries.push(query(collection(db, 'users'), where('phone', '==', raw), limit(8)));
+    if (digits.length >= 6) {
+      queries.push(query(collection(db, 'users'), where('phoneNormalized', '==', digits), limit(8)));
+      if (digits !== raw) {
+        queries.push(query(collection(db, 'users'), where('phone', '==', digits), limit(8)));
+      }
+    }
+    // Also allow searching by exact email if someone typed an email without realizing
+    queries.push(query(collection(db, 'users'), where('emailLower', '==', lower), limit(5)));
+  }
+
+  const found = new Map<string, OfficerSearchResult>();
+  let permissionError: unknown = null;
+
+  for (const q of queries) {
+    try {
+      const snap = await getDocs(q);
+      snap.forEach((docSnap) => {
+        const d = docSnap.data() as Partial<FirebaseUserProfile>;
+        const uid = String(d.uid || docSnap.id);
+        if (excludeUid && uid === excludeUid) return;
+        if (!found.has(uid)) {
+          found.set(uid, {
+            uid,
+            officerName: String(d.officerName || 'Field Officer'),
+            email: String(d.email || ''),
+            phone: d.phone ? String(d.phone) : undefined,
+            role: d.role ? String(d.role) : 'MPO',
+            areaId: String(d.areaId || ''),
+            areaName: String(d.areaName || d.areaId || ''),
+            district: d.district ? String(d.district) : undefined,
+          });
+        }
+      });
+    } catch (err) {
+      permissionError = err;
+    }
+  }
+
+  if (found.size === 0 && permissionError) {
+    throw permissionError;
+  }
+
+  return Array.from(found.values());
+}
+
+/**
+ * Sends a real Firestore invite into the `invites` collection.
+ */
+export async function sendTeamInvite(params: {
+  recipient: OfficerSearchResult;
+  senderProfile: FirebaseUserProfile;
+}): Promise<TeamInvite> {
+  const { recipient, senderProfile } = params;
+  const now = new Date().toISOString();
+  const joinCode = senderProfile.joinCode || deriveAreaJoinCode(senderProfile.areaId);
+  const inviteId = sanitizeDocId(`${senderProfile.areaId}_${recipient.uid}`, 'INV');
+  const invite: TeamInvite = {
+    inviteId,
+    toUid: recipient.uid,
+    toEmail: recipient.email,
+    ...(recipient.phone ? { toPhone: recipient.phone } : {}),
+    toName: recipient.officerName,
+    fromUid: senderProfile.uid,
+    fromName: senderProfile.officerName,
+    areaId: senderProfile.areaId,
+    areaName: senderProfile.areaName,
+    district: senderProfile.district || '',
+    upazila: senderProfile.upazila || '',
+    joinCode,
+    status: 'pending',
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await setDoc(doc(db, 'invites', inviteId), invite, { merge: true });
+  return invite;
+}
+
+/**
+ * Subscribes in real time to pending invites addressed to the signed-in officer (`toUid == uid`).
+ */
+export function subscribeToIncomingInvites(
+  uid: string,
+  onInvites: (invites: TeamInvite[]) => void
+): Unsubscribe {
+  const q = query(collection(db, 'invites'), where('toUid', '==', uid));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const pending: TeamInvite[] = [];
+      snap.forEach((docSnap) => {
+        const d = docSnap.data() as Partial<TeamInvite>;
+        if ((d.status || 'pending') !== 'pending') return;
+        pending.push({
+          inviteId: String(d.inviteId || docSnap.id),
+          toUid: String(d.toUid || uid),
+          toEmail: String(d.toEmail || ''),
+          toPhone: d.toPhone ? String(d.toPhone) : undefined,
+          toName: d.toName ? String(d.toName) : undefined,
+          fromUid: String(d.fromUid || ''),
+          fromName: String(d.fromName || 'Team Officer'),
+          areaId: String(d.areaId || ''),
+          areaName: String(d.areaName || d.areaId || ''),
+          district: d.district ? String(d.district) : '',
+          upazila: d.upazila ? String(d.upazila) : '',
+          joinCode: String(d.joinCode || deriveAreaJoinCode(String(d.areaId || ''))),
+          status: 'pending',
+          createdAt: String(d.createdAt || new Date().toISOString()),
+          updatedAt: String(d.updatedAt || new Date().toISOString()),
+        });
+      });
+      pending.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      onInvites(pending);
+    },
+    (error) => {
+      console.warn('Invites listener warning:', formatFirebaseAuthError(error));
+    }
+  );
+}
+
+/**
+ * Switches a user's `users/{uid}.areaId` to the target shared Area and registers them in `areas/{areaId}/members/{uid}`.
+ */
+async function switchUserToSharedArea(
+  user: User,
+  currentProfile: FirebaseUserProfile,
+  target: {
+    areaId: string;
+    areaName: string;
+    district?: string;
+    upazila?: string;
+    joinCode?: string;
+  }
+): Promise<FirebaseUserProfile> {
+  const now = new Date().toISOString();
+  const joinCode = target.joinCode || deriveAreaJoinCode(target.areaId);
+  const updatedProfile: FirebaseUserProfile = {
+    ...currentProfile,
+    areaId: target.areaId,
+    areaName: target.areaName || target.areaId,
+    district: target.district ?? currentProfile.district ?? '',
+    upazila: target.upazila ?? currentProfile.upazila ?? '',
+    joinCode,
+    updatedAt: now,
+  };
+
+  // 1. Update users/{uid} FIRST so Firestore rules grant membership to the new areaId
+  await setDoc(doc(db, 'users', user.uid), updatedProfile, { merge: true });
+  saveCachedFirebaseProfile(updatedProfile);
+
+  // 2. Add/update the officer in the shared area's members subcollection
+  const memberDoc: MPOUser & { updatedAt: string; updatedBy: string } = {
+    MPO_ID: user.uid,
+    MPO_Name: updatedProfile.officerName,
+    Role: updatedProfile.role || 'MPO',
+    Designation: updatedProfile.role || 'MPO',
+    Employee_ID: updatedProfile.employeeCode || '',
+    Employee_Code: updatedProfile.employeeCode || '',
+    Area_ID: updatedProfile.areaId,
+    Area: updatedProfile.areaName,
+    Territory: [updatedProfile.district, updatedProfile.upazila].filter(Boolean).join(' · '),
+    Phone_Number: updatedProfile.phone || '',
+    Phone: updatedProfile.phone || '',
+    Email: updatedProfile.email || user.email || '',
+    Status: 'Active',
+    updatedAt: now,
+    updatedBy: user.uid,
+  };
+  await setDoc(doc(db, 'areas', updatedProfile.areaId, 'members', user.uid), memberDoc, {
+    merge: true,
+  });
+
+  return updatedProfile;
+}
+
+/**
+ * Accepts a pending invite: marks invite accepted and switches officer into the shared Area/Team.
+ */
+export async function acceptTeamInvite(
+  user: User,
+  currentProfile: FirebaseUserProfile,
+  invite: TeamInvite
+): Promise<FirebaseUserProfile> {
+  const now = new Date().toISOString();
+  await setDoc(
+    doc(db, 'invites', invite.inviteId),
+    { status: 'accepted', updatedAt: now },
+    { merge: true }
+  );
+
+  return switchUserToSharedArea(user, currentProfile, {
+    areaId: invite.areaId,
+    areaName: invite.areaName,
+    district: invite.district,
+    upazila: invite.upazila,
+    joinCode: invite.joinCode,
+  });
+}
+
+/**
+ * Declines a pending invite.
+ */
+export async function declineTeamInvite(inviteId: string): Promise<void> {
+  await setDoc(
+    doc(db, 'invites', inviteId),
+    { status: 'declined', updatedAt: new Date().toISOString() },
+    { merge: true }
+  );
+}
+
+/**
+ * Joins an existing shared Area/Team immediately using its short Join Code (e.g. DI-4829) or Area ID.
+ */
+export async function joinTeamByCode(
+  user: User,
+  currentProfile: FirebaseUserProfile,
+  codeInput: string
+): Promise<FirebaseUserProfile> {
+  const raw = codeInput.trim();
+  if (!raw) {
+    throw new Error('Please enter a Team Join Code (e.g. DI-4829).');
+  }
+
+  const normalizedCode = normalizeJoinCodeInput(raw);
+  let target: {
+    areaId: string;
+    areaName: string;
+    district?: string;
+    upazila?: string;
+    joinCode?: string;
+  } | null = null;
+
+  // 1. Direct lookup in joinCodes/{DI-XXXX}
+  try {
+    const codeSnap = await getDoc(doc(db, 'joinCodes', normalizedCode));
+    if (codeSnap.exists()) {
+      const d = codeSnap.data() as Record<string, unknown>;
+      if (d.areaId) {
+        target = {
+          areaId: String(d.areaId),
+          areaName: String(d.areaName || d.areaId),
+          district: d.district ? String(d.district) : '',
+          upazila: d.upazila ? String(d.upazila) : '',
+          joinCode: String(d.joinCode || normalizedCode),
+        };
+      }
+    }
+  } catch {
+    // Fall through to areas query
+  }
+
+  // 2. Fallback query on areas collection where joinCode == normalizedCode
+  if (!target) {
+    try {
+      const snap = await getDocs(
+        query(collection(db, 'areas'), where('joinCode', '==', normalizedCode), limit(1))
+      );
+      if (!snap.empty) {
+        const d = snap.docs[0].data() as Record<string, unknown>;
+        target = {
+          areaId: String(d.areaId || snap.docs[0].id),
+          areaName: String(d.areaName || snap.docs[0].id),
+          district: d.district ? String(d.district) : '',
+          upazila: d.upazila ? String(d.upazila) : '',
+          joinCode: String(d.joinCode || normalizedCode),
+        };
+      }
+    } catch {
+      // Fall through
+    }
+  }
+
+  // 3. Fallback: allow joining directly by exact Area ID slug if pasted
+  if (!target) {
+    const rawSlug = raw.toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+    try {
+      const snap = await getDocs(
+        query(collection(db, 'areas'), where('areaId', '==', rawSlug), limit(1))
+      );
+      if (!snap.empty) {
+        const d = snap.docs[0].data() as Record<string, unknown>;
+        target = {
+          areaId: String(d.areaId || snap.docs[0].id),
+          areaName: String(d.areaName || snap.docs[0].id),
+          district: d.district ? String(d.district) : '',
+          upazila: d.upazila ? String(d.upazila) : '',
+          joinCode: String(d.joinCode || deriveAreaJoinCode(String(d.areaId || snap.docs[0].id))),
+        };
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
+  if (!target) {
+    throw new Error(
+      `No Team found for code "${normalizedCode}". Double-check the Join Code shared by your teammate.`
+    );
+  }
+
+  if (target.areaId === currentProfile.areaId) {
+    throw new Error(`You are already a member of ${target.areaName}.`);
+  }
+
+  return switchUserToSharedArea(user, currentProfile, target);
 }

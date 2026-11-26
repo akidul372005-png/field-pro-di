@@ -11,7 +11,6 @@ import {
   CloudOff,
   GraduationCap,
   Lock,
-  LogOut,
   MapPin,
   Pill,
   RefreshCw,
@@ -30,7 +29,7 @@ const DoseCapsulesArtwork: React.FC = () => (
     viewBox="0 0 132 72"
     fill="none"
     aria-hidden="true"
-    className="w-[106px] sm:w-[126px] h-[58px] sm:h-[66px] shrink-0 pointer-events-none select-none"
+    className="w-[66px] sm:w-[116px] h-[44px] sm:h-[62px] shrink-0 pointer-events-none select-none"
   >
     {/* Soft dot-matrix backdrop */}
     <g fill="#60D5FF" opacity="0.28">
@@ -85,7 +84,7 @@ const OpenBookArtwork: React.FC = () => (
     viewBox="0 0 116 68"
     fill="none"
     aria-hidden="true"
-    className="w-[86px] sm:w-[104px] h-[52px] sm:h-[60px] shrink-0 pointer-events-none select-none"
+    className="w-[62px] sm:w-[98px] h-[42px] sm:h-[58px] shrink-0 pointer-events-none select-none"
   >
     <defs>
       <linearGradient id="bookCover" x1="0" y1="0" x2="1" y2="1">
@@ -247,14 +246,13 @@ export const DashboardView: React.FC = () => {
     isSuperAdmin,
     currentUser,
     teamSession,
-    firebaseUserName,
+    pendingInvites,
     isOnline,
     isSyncing,
     isLoadingData,
     syncQueue,
     setActiveTab,
     openTeamSection,
-    logoutTeam,
     setSelectedSpecialistId,
     startDetailingFlow,
     refreshFromServer,
@@ -262,16 +260,6 @@ export const DashboardView: React.FC = () => {
   } = useApp();
 
   const isTeamAuthenticated = Boolean(currentUser || teamSession);
-  const officerHomeName =
-    teamSession?.mpoName ||
-    firebaseUserName ||
-    currentUser?.displayName ||
-    currentUser?.email?.split('@')[0] ||
-    'Field Officer';
-  const officerHomeArea = teamSession
-    ? [teamSession.district, teamSession.areaName].filter(Boolean).join(' · ') ||
-      teamSession.areaName
-    : 'Complete Area Setup';
 
   const navigateTo = (
     tab:
@@ -557,24 +545,24 @@ export const DashboardView: React.FC = () => {
         <button
           type="button"
           onClick={() => navigateTo('dose-calculator')}
-          className="group relative overflow-hidden w-full min-h-[64px] sm:min-h-[72px] rounded-2xl bg-gradient-to-r from-[#072047] via-[#0B3969] to-[#0B6D88] hover:brightness-105 text-white shadow-[0_8px_20px_rgba(7,32,71,0.22)] px-3.5 sm:px-4 py-2.5 flex items-center justify-between gap-2 text-left transition-all duration-150 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0E7C7B] cursor-pointer"
+          className="group relative overflow-hidden w-full min-h-[62px] sm:min-h-[72px] rounded-2xl bg-gradient-to-r from-[#072047] via-[#0B3969] to-[#0B6D88] hover:brightness-105 text-white shadow-[0_8px_20px_rgba(7,32,71,0.22)] px-3 sm:px-4 py-2.5 flex items-center justify-between gap-2 text-left transition-all duration-150 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0E7C7B] cursor-pointer"
         >
-          <div className="relative z-10 flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-gradient-to-br from-[#2CD4E8] to-[#0F83B8] text-white shadow-md shadow-cyan-950/30 flex items-center justify-center shrink-0">
-              <Calculator className="w-5 h-5" />
+          <div className="relative z-10 flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+            <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-full bg-gradient-to-br from-[#2CD4E8] to-[#0F83B8] text-white shadow-md shadow-cyan-950/30 flex items-center justify-center shrink-0">
+              <Calculator className="w-[18px] h-[18px] sm:w-5 sm:h-5" />
             </div>
             <span aria-hidden="true" className="h-8 w-px bg-white/20 shrink-0" />
-            <div className="min-w-0">
-              <div className="font-display font-bold text-[16px] sm:text-[17px] text-white tracking-tight leading-tight truncate">
+            <div className="min-w-0 flex-1">
+              <div className="font-display font-bold text-[15px] sm:text-[17px] text-white tracking-tight leading-tight">
                 Dose Calculator
               </div>
-              <div className="text-[11.5px] sm:text-xs font-medium text-[#CBE7F6] truncate mt-0.5">
+              <div className="text-[11px] sm:text-xs font-medium text-[#CBE7F6] leading-snug mt-0.5">
                 Calculate with Confidence
               </div>
             </div>
           </div>
 
-          <div className="relative z-10 flex items-center gap-0.5 shrink-0 -my-2 -mr-1">
+          <div className="relative z-10 flex items-center gap-0.5 shrink-0 -my-1.5 -mr-0.5">
             <DoseCapsulesArtwork />
             <ArrowRight className="w-4 h-4 sm:w-5 sm:h-5 text-white/95 shrink-0 transition-transform duration-150 group-hover:translate-x-0.5" />
           </div>
@@ -584,93 +572,94 @@ export const DashboardView: React.FC = () => {
         <button
           type="button"
           onClick={() => navigateTo('knowledge')}
-          className="group relative overflow-hidden w-full min-h-[64px] sm:min-h-[72px] rounded-2xl bg-gradient-to-r from-[#E6FBF3] via-[#ECFDF7] to-[#D6F7EC] dark:from-[#0C2E2B] dark:via-[#0D2235] dark:to-[#0C3532] border border-emerald-500/20 dark:border-emerald-400/25 hover:border-emerald-500/45 shadow-[0_6px_18px_rgba(10,60,55,0.08)] dark:shadow-black/30 px-3.5 sm:px-4 py-2.5 flex items-center justify-between gap-2 text-left transition-all duration-150 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-[#0E7C7B] cursor-pointer"
+          className="group relative overflow-hidden w-full min-h-[62px] sm:min-h-[72px] rounded-2xl bg-gradient-to-r from-[#E6FBF3] via-[#ECFDF7] to-[#D6F7EC] dark:from-[#0C2E2B] dark:via-[#0D2235] dark:to-[#0C3532] border border-emerald-500/20 dark:border-emerald-400/25 hover:border-emerald-500/45 shadow-[0_6px_18px_rgba(10,60,55,0.08)] dark:shadow-black/30 px-3 sm:px-4 py-2.5 flex items-center justify-between gap-2 text-left transition-all duration-150 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-[#0E7C7B] cursor-pointer"
         >
-          <div className="relative z-10 flex items-center gap-3 min-w-0">
-            <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-gradient-to-br from-[#1CE09A] to-[#06996A] text-white shadow-md shadow-emerald-600/25 flex items-center justify-center shrink-0">
-              <GraduationCap className="w-5 h-5" />
+          <div className="relative z-10 flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+            <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-full bg-gradient-to-br from-[#1CE09A] to-[#06996A] text-white shadow-md shadow-emerald-600/25 flex items-center justify-center shrink-0">
+              <GraduationCap className="w-[18px] h-[18px] sm:w-5 sm:h-5" />
             </div>
             <span
               aria-hidden="true"
               className="h-8 w-px bg-emerald-800/15 dark:bg-emerald-300/20 shrink-0"
             />
-            <div className="min-w-0">
-              <div className="font-display font-bold text-[16px] sm:text-[17px] text-[#0A2D54] dark:text-white tracking-tight leading-tight truncate">
+            <div className="min-w-0 flex-1">
+              <div className="font-display font-bold text-[15px] sm:text-[17px] text-[#0A2D54] dark:text-white tracking-tight leading-tight">
                 Knowledge Hub
               </div>
-              <div className="text-[11.5px] sm:text-xs font-medium text-[#0B7C6B] dark:text-emerald-300 truncate mt-0.5">
+              <div className="text-[11px] sm:text-xs font-medium text-[#0B7C6B] dark:text-emerald-300 leading-snug mt-0.5">
                 MPO Desk • Medical Knowledge
               </div>
             </div>
           </div>
 
-          <div className="relative z-10 flex items-center gap-0.5 shrink-0 -my-2 -mr-0.5">
+          <div className="relative z-10 flex items-center gap-0.5 shrink-0 -my-1.5 -mr-0.5">
             <OpenBookArtwork />
             <ArrowRight className="w-4 h-4 sm:w-5 sm:h-5 text-[#0A2D54]/80 dark:text-emerald-300 shrink-0 transition-transform duration-150 group-hover:translate-x-0.5" />
           </div>
         </button>
 
-        {/* Stacked Row 3: Team / Area Workspace — Compact Sign-In Card when signed out; Expanded Officer + Quick-Access Card when authenticated */}
+        {/* Stacked Row 3: Compact 4-Column Team Shortcut Row when logged in; Sign-In Card when signed out */}
         {isTeamAuthenticated ? (
-          <div className="w-full rounded-2xl bg-white dark:bg-[#0D2235] border border-emerald-500/25 dark:border-[#149A99]/30 shadow-[0_6px_18px_rgba(10,40,75,0.08)] dark:shadow-black/30 p-3 sm:p-3.5 space-y-2.5">
-            {/* Officer Name + District/Area Badge + Sign Out */}
-            <div className="flex items-center justify-between gap-2">
-              <button
-                type="button"
-                onClick={() => handleOpenTeamQuickTab('doctors')}
-                className="flex items-center gap-2.5 min-w-0 flex-1 text-left cursor-pointer group"
-              >
-                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#14B8A6] to-[#0E7C7B] text-white shadow-sm flex items-center justify-center shrink-0">
-                  <Users className="w-4 h-4" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="font-display font-bold text-[14px] sm:text-[15px] text-[#0D2B45] dark:text-white leading-tight truncate group-hover:text-[#0E7C7B] dark:group-hover:text-[#22E3D0] transition-colors">
-                    {officerHomeName}
-                  </div>
-                  <div className="flex items-center gap-1 mt-0.5 min-w-0">
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/15 text-[#0A7D63] dark:text-[#5EEAD4] text-[10.5px] font-semibold truncate max-w-full">
-                      <MapPin className="w-3 h-3 shrink-0" />
-                      <span className="truncate">{officerHomeArea}</span>
+          <div
+            aria-label="Private Team Workspace shortcuts"
+            className="grid grid-cols-4 gap-1.5 sm:gap-2"
+          >
+            {(
+              [
+                {
+                  id: 'doctors' as TeamWorkspaceSubTab,
+                  label: 'Doctors',
+                  icon: Stethoscope,
+                  iconBg: 'bg-teal-50 dark:bg-teal-500/15 text-[#0E7C7B] dark:text-[#22E3D0]',
+                },
+                {
+                  id: 'chambers' as TeamWorkspaceSubTab,
+                  label: 'Chambers',
+                  icon: MapPin,
+                  iconBg: 'bg-sky-50 dark:bg-sky-500/15 text-[#0F65B8] dark:text-sky-300',
+                },
+                {
+                  id: 'hospitals' as TeamWorkspaceSubTab,
+                  label: 'Hospitals',
+                  icon: Building2,
+                  iconBg: 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-600 dark:text-indigo-300',
+                },
+                {
+                  id: 'team' as TeamWorkspaceSubTab,
+                  label: 'Team',
+                  icon: Users,
+                  iconBg: 'bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
+                },
+              ] as const
+            ).map((item) => {
+              const QuickIcon = item.icon;
+              const showInviteDot = item.id === 'team' && pendingInvites.length > 0;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => handleOpenTeamQuickTab(item.id)}
+                  className="relative rounded-2xl bg-white dark:bg-[#0D2235] border border-white/95 dark:border-[#EBF4FA]/12 hover:border-[#0E7C7B]/45 shadow-[0_5px_14px_rgba(10,40,75,0.07)] dark:shadow-black/25 px-1 py-2 sm:py-2.5 flex flex-col items-center justify-center gap-1 transition-all duration-150 active:scale-[0.96] cursor-pointer"
+                >
+                  {showInviteDot && (
+                    <span
+                      aria-label={`${pendingInvites.length} pending team invite`}
+                      className="absolute top-1.5 right-1.5 min-w-[16px] h-[16px] px-1 rounded-full bg-rose-600 text-white text-[9.5px] font-bold inline-flex items-center justify-center leading-none"
+                    >
+                      {pendingInvites.length}
                     </span>
-                  </div>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={logoutTeam}
-                aria-label="Sign out of Team Workspace"
-                className="min-h-[34px] px-2.5 py-1 rounded-xl border border-rose-200 dark:border-rose-500/30 bg-rose-50/80 dark:bg-rose-950/35 hover:bg-rose-100 dark:hover:bg-rose-950/60 text-rose-600 dark:text-rose-300 text-[11.5px] font-bold inline-flex items-center gap-1 shrink-0 transition-colors active:scale-[0.96] cursor-pointer"
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                <span>Sign Out</span>
-              </button>
-            </div>
-
-            {/* 4-Pill Quick-Access Row: Doctors · Chambers · Hospitals · Team */}
-            <div className="grid grid-cols-4 gap-1.5">
-              {(
-                [
-                  { id: 'doctors' as TeamWorkspaceSubTab, label: 'Doctors', icon: Stethoscope },
-                  { id: 'chambers' as TeamWorkspaceSubTab, label: 'Chambers', icon: MapPin },
-                  { id: 'hospitals' as TeamWorkspaceSubTab, label: 'Hospitals', icon: Building2 },
-                  { id: 'team' as TeamWorkspaceSubTab, label: 'Team', icon: Users },
-                ] as const
-              ).map((item) => {
-                const QuickIcon = item.icon;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => handleOpenTeamQuickTab(item.id)}
-                    className="min-h-[36px] px-1.5 py-1.5 rounded-xl bg-[#F2F8FC] dark:bg-[#112B44] hover:bg-[#E2F2F4] dark:hover:bg-[#163B5B] border border-[#0D2B45]/8 dark:border-white/10 text-[#0D2B45] dark:text-[#EBF4FA] text-[11px] sm:text-xs font-semibold inline-flex items-center justify-center gap-1 transition-colors active:scale-[0.96] cursor-pointer whitespace-nowrap"
+                  )}
+                  <span
+                    className={`w-7 h-7 sm:w-8 sm:h-8 rounded-xl flex items-center justify-center shrink-0 ${item.iconBg}`}
                   >
-                    <QuickIcon className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#22E3D0] shrink-0" />
-                    <span className="truncate">{item.label}</span>
-                  </button>
-                );
-              })}
-            </div>
+                    <QuickIcon className="w-[15px] h-[15px] sm:w-4 sm:h-4" />
+                  </span>
+                  <span className="text-[11px] sm:text-xs font-semibold text-[#0D2B45] dark:text-[#EBF4FA] leading-tight whitespace-nowrap">
+                    {item.label}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         ) : (
           <button

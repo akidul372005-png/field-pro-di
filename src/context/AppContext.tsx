@@ -20,9 +20,11 @@ import {
   Hospital,
   MPOUser,
   NavTab,
+  OfficerSearchResult,
   Product,
   QueuedMutation,
   SheetName,
+  TeamInvite,
   TeamSession,
   ToastNotification,
 } from '../types';
@@ -30,15 +32,19 @@ import { auth, testFirestoreConnection } from '../lib/firebase';
 import { loadDatasetFromIndexedDB, saveDatasetToIndexedDB } from '../lib/cacheDb';
 import {
   TeamRegistrationInput,
+  acceptTeamInvite,
   clearCachedFirebaseProfile,
+  declineTeamInvite,
   deleteAreaChamber,
   deleteAreaDoctor,
   deleteAreaHospital,
   deleteAreaMember,
   deleteAreaNote,
+  ensureAreaJoinCodeRegistered,
   fetchUserProfileFromFirestore,
   formatFirebaseAuthError,
   getCachedFirebaseProfile,
+  joinTeamByCode,
   profileToTeamSession,
   registerTeamUserWithFirebase,
   resolveGoogleRedirectResult,
@@ -48,10 +54,13 @@ import {
   saveAreaMember,
   saveAreaNote,
   saveUserAndAreaDocs,
+  searchRegisteredOfficers,
+  sendTeamInvite,
   signInTeamUserWithFirebase,
   signInTeamWithGoogle,
   signOutTeamUserFromFirebase,
   subscribeToAreaWorkspace,
+  subscribeToIncomingInvites,
 } from '../services/firebaseTeam';
 import {
   DEFAULT_API_URL,
@@ -142,7 +151,10 @@ interface AppContextValue {
   firebaseUserName: string | null;
   needsFirebaseAreaSetup: boolean;
   firebaseSyncError: string | null;
+  googleRedirectError: string | null;
+  clearGoogleRedirectError: () => void;
   areaNotes: AreaNote[];
+  pendingInvites: TeamInvite[];
   teamPinConfigured: boolean;
   loginTeamWithGoogle: () => Promise<{ ok: boolean; redirected?: boolean; error?: string }>;
   loginTeamWithFirebase: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
@@ -152,6 +164,13 @@ interface AppContextValue {
   completeFirebaseAreaProfile: (
     input: Omit<TeamRegistrationInput, 'email' | 'password'>
   ) => Promise<{ ok: boolean; error?: string }>;
+  searchTeamOfficers: (
+    queryText: string
+  ) => Promise<{ ok: boolean; results: OfficerSearchResult[]; error?: string }>;
+  sendOfficerTeamInvite: (recipient: OfficerSearchResult) => Promise<{ ok: boolean; error?: string }>;
+  acceptIncomingInvite: (invite: TeamInvite) => Promise<{ ok: boolean; error?: string }>;
+  declineIncomingInvite: (inviteId: string) => Promise<{ ok: boolean; error?: string }>;
+  joinTeamWithCode: (code: string) => Promise<{ ok: boolean; error?: string }>;
   saveTeamAreaNote: (note: {
     Note_ID?: string;
     Title: string;
@@ -332,11 +351,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const firebaseProfileRef = useRef<FirebaseUserProfile | null>(firebaseProfile);
   const authSeqRef = useRef(0);
   const [firebaseSyncError, setFirebaseSyncError] = useState<string | null>(null);
+  const [googleRedirectError, setGoogleRedirectError] = useState<string | null>(null);
+  const clearGoogleRedirectError = useCallback(() => setGoogleRedirectError(null), []);
   const [firebaseDoctors, setFirebaseDoctors] = useState<Doctor[]>([]);
   const [firebaseChambers, setFirebaseChambers] = useState<Chamber[]>([]);
   const [firebaseHospitals, setFirebaseHospitals] = useState<Hospital[]>([]);
   const [firebaseMembers, setFirebaseMembers] = useState<MPOUser[]>([]);
   const [areaNotes, setAreaNotes] = useState<AreaNote[]>([]);
+  const [pendingInvites, setPendingInvites] = useState<TeamInvite[]>([]);
 
   useEffect(() => {
     firebaseProfileRef.current = firebaseProfile;
@@ -520,6 +542,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     void resolveGoogleRedirectResult().then((redirected) => {
       if (!active || !redirected) return;
+      if (redirected.error) {
+        setGoogleRedirectError(redirected.error);
+        setFirebaseAuthReady(true);
+        setActiveTab('team');
+        return;
+      }
+      if (!redirected.user) return;
+      setGoogleRedirectError(null);
       setFirebaseUser(redirected.user);
       if (redirected.profile) {
         firebaseProfileRef.current = redirected.profile;
@@ -548,6 +578,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setFirebaseHospitals([]);
         setFirebaseMembers([]);
         setAreaNotes([]);
+        setPendingInvites([]);
         setFirebaseSyncError(null);
         setTeamSession((prev) => {
           if (prev?.loginMode === 'firebase') {
@@ -623,6 +654,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       unsub();
     };
   }, [firebaseUser, firebaseProfile?.areaId]);
+
+  // Ensure the active area has its short Join Code (e.g. DI-4829) registered in Firestore
+  useEffect(() => {
+    if (!firebaseUser || !firebaseProfile?.areaId) return;
+    void ensureAreaJoinCodeRegistered(firebaseProfile);
+  }, [firebaseUser, firebaseProfile]);
+
+  // Live subscription to incoming Team Invites for the logged-in officer
+  useEffect(() => {
+    if (!firebaseUser?.uid) {
+      setPendingInvites([]);
+      return;
+    }
+    const unsub = subscribeToIncomingInvites(firebaseUser.uid, (invites) => {
+      setPendingInvites(invites);
+    });
+    return () => {
+      unsub();
+    };
+  }, [firebaseUser?.uid]);
 
   const needsFirebaseAreaSetup = Boolean(
     firebaseUser && !isProfileLoading && !firebaseProfile && !teamSession
@@ -767,6 +818,123 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [pushToast]
   );
 
+  const searchTeamOfficers = useCallback(
+    async (
+      queryText: string
+    ): Promise<{ ok: boolean; results: OfficerSearchResult[]; error?: string }> => {
+      if (!firebaseUser) {
+        return { ok: false, results: [], error: 'Please sign in first.' };
+      }
+      try {
+        const results = await searchRegisteredOfficers(queryText, firebaseUser.uid);
+        return { ok: true, results };
+      } catch (err) {
+        return { ok: false, results: [], error: formatFirebaseAuthError(err) };
+      }
+    },
+    [firebaseUser]
+  );
+
+  const sendOfficerTeamInvite = useCallback(
+    async (recipient: OfficerSearchResult): Promise<{ ok: boolean; error?: string }> => {
+      if (!firebaseUser || !firebaseProfile) {
+        return { ok: false, error: 'Complete your Area Profile first before sending invites.' };
+      }
+      try {
+        await sendTeamInvite({ recipient, senderProfile: firebaseProfile });
+        pushToast({
+          type: 'success',
+          title: `Invite sent to ${recipient.officerName}`,
+          message: `They will receive a live Team notification to join ${firebaseProfile.areaName}.`,
+        });
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: formatFirebaseAuthError(err) };
+      }
+    },
+    [firebaseUser, firebaseProfile, pushToast]
+  );
+
+  const acceptIncomingInvite = useCallback(
+    async (invite: TeamInvite): Promise<{ ok: boolean; error?: string }> => {
+      const current = auth.currentUser || firebaseUser;
+      const activeProfile = firebaseProfileRef.current;
+      if (!current) {
+        return { ok: false, error: 'Please sign in again first.' };
+      }
+      if (!activeProfile) {
+        return { ok: false, error: 'Complete your Area Profile first before accepting invites.' };
+      }
+      try {
+        const updated = await acceptTeamInvite(current, activeProfile, invite);
+        authSeqRef.current += 1;
+        firebaseProfileRef.current = updated;
+        setFirebaseProfile(updated);
+        const nextSession = profileToTeamSession(updated);
+        setTeamSession(nextSession);
+        saveTeamSession(nextSession);
+        setPendingInvites((prev) => prev.filter((item) => item.inviteId !== invite.inviteId));
+        pushToast({
+          type: 'success',
+          title: `Joined ${updated.areaName}`,
+          message: 'Shared Doctors, Chambers, Hospitals & Team Members are now synced.',
+        });
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: formatFirebaseAuthError(err) };
+      }
+    },
+    [firebaseUser, pushToast]
+  );
+
+  const declineIncomingInvite = useCallback(
+    async (inviteId: string): Promise<{ ok: boolean; error?: string }> => {
+      try {
+        await declineTeamInvite(inviteId);
+        setPendingInvites((prev) => prev.filter((item) => item.inviteId !== inviteId));
+        pushToast({
+          type: 'info',
+          title: 'Invite declined',
+        });
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: formatFirebaseAuthError(err) };
+      }
+    },
+    [pushToast]
+  );
+
+  const joinTeamWithCode = useCallback(
+    async (code: string): Promise<{ ok: boolean; error?: string }> => {
+      const current = auth.currentUser || firebaseUser;
+      const activeProfile = firebaseProfileRef.current;
+      if (!current) {
+        return { ok: false, error: 'Please sign in again first.' };
+      }
+      if (!activeProfile) {
+        return { ok: false, error: 'Complete your Area Profile first before joining a team.' };
+      }
+      try {
+        const updated = await joinTeamByCode(current, activeProfile, code);
+        authSeqRef.current += 1;
+        firebaseProfileRef.current = updated;
+        setFirebaseProfile(updated);
+        const nextSession = profileToTeamSession(updated);
+        setTeamSession(nextSession);
+        saveTeamSession(nextSession);
+        pushToast({
+          type: 'success',
+          title: `Joined ${updated.areaName}`,
+          message: `Connected via Join Code ${updated.joinCode}. Shared area records are now live.`,
+        });
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: formatFirebaseAuthError(err) };
+      }
+    },
+    [firebaseUser, pushToast]
+  );
+
   const saveTeamAreaNote = useCallback(
     async (note: {
       Note_ID?: string;
@@ -889,6 +1057,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setFirebaseHospitals([]);
     setFirebaseMembers([]);
     setAreaNotes([]);
+    setPendingInvites([]);
     setFirebaseSyncError(null);
     setTeamSession(null);
     clearTeamSession();
@@ -1811,18 +1980,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       firebaseUserName: firebaseUser?.displayName ?? null,
       needsFirebaseAreaSetup,
       firebaseSyncError,
+      googleRedirectError,
+      clearGoogleRedirectError,
       areaNotes,
-    teamPinConfigured,
-    loginTeamWithGoogle,
-    loginTeamWithFirebase,
-    registerTeamWithFirebase,
-    completeFirebaseAreaProfile,
-    saveTeamAreaNote,
-    deleteTeamAreaNote,
-    loginWithAreaPin,
-    loginWithMpoCredentials,
-    logoutTeam,
-    updateTeamPin,
+      pendingInvites,
+      teamPinConfigured,
+      loginTeamWithGoogle,
+      loginTeamWithFirebase,
+      registerTeamWithFirebase,
+      completeFirebaseAreaProfile,
+      searchTeamOfficers,
+      sendOfficerTeamInvite,
+      acceptIncomingInvite,
+      declineIncomingInvite,
+      joinTeamWithCode,
+      saveTeamAreaNote,
+      deleteTeamAreaNote,
+      loginWithAreaPin,
+      loginWithMpoCredentials,
+      logoutTeam,
+      updateTeamPin,
     isSuperAdmin,
     superAdminSource,
     refreshSuperAdminStatus,
@@ -1904,12 +2081,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       firebaseUser,
       needsFirebaseAreaSetup,
       firebaseSyncError,
+      googleRedirectError,
+      clearGoogleRedirectError,
       areaNotes,
+      pendingInvites,
       teamPinConfigured,
       loginTeamWithGoogle,
       loginTeamWithFirebase,
       registerTeamWithFirebase,
       completeFirebaseAreaProfile,
+      searchTeamOfficers,
+      sendOfficerTeamInvite,
+      acceptIncomingInvite,
+      declineIncomingInvite,
+      joinTeamWithCode,
       saveTeamAreaNote,
       deleteTeamAreaNote,
       loginWithAreaPin,

@@ -18,7 +18,10 @@ import {
 
 export const firebaseConfig = {
   apiKey: 'AIzaSyCdzK_xpGPo6iDu2z3HemGe-WKEXL5Qlvk',
-  authDomain: 'field-pro-di.firebaseapp.com',
+  authDomain:
+    typeof window !== 'undefined' && window.location.hostname !== 'localhost'
+      ? window.location.hostname
+      : 'field-pro-di.firebaseapp.com',
   projectId: 'field-pro-di',
   storageBucket: 'field-pro-di.firebasestorage.app',
   messagingSenderId: '464919706082',
