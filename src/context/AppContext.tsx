@@ -1294,10 +1294,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [apiUrl, pushToast, refreshFromServer, syncPendingQueue]);
 
-  // Auto-sync queued entries and fetch fresh Google Sheets data on startup/reload & tab return
+  // Auto-sync queued entries and fetch fresh Google Sheets data asynchronously when idle
   useEffect(() => {
     let cancelled = false;
     let lastAutoRefreshMs = 0;
+    let idleHandle: number | null = null;
+    let timeoutHandle: number | null = null;
+
+    const cancelScheduledSync = () => {
+      if (idleHandle !== null && typeof window.cancelIdleCallback === 'function') {
+        window.cancelIdleCallback(idleHandle);
+        idleHandle = null;
+      }
+      if (timeoutHandle !== null) {
+        window.clearTimeout(timeoutHandle);
+        timeoutHandle = null;
+      }
+    };
 
     const runFreshSync = async () => {
       if (cancelled || !isConfiguredApiUrl(apiUrl) || !navigator.onLine) return;
@@ -1311,18 +1324,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     };
 
-    void runFreshSync();
+    // Defer background refresh off the critical paint/tap path so cached UI responds in <100ms
+    const scheduleBackgroundSync = () => {
+      cancelScheduledSync();
+      if (typeof window.requestIdleCallback === 'function') {
+        idleHandle = window.requestIdleCallback(
+          () => {
+            idleHandle = null;
+            void runFreshSync();
+          },
+          { timeout: 1200 }
+        );
+      } else {
+        timeoutHandle = window.setTimeout(() => {
+          timeoutHandle = null;
+          void runFreshSync();
+        }, 180);
+      }
+    };
+
+    scheduleBackgroundSync();
 
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'hidden') return;
       if (Date.now() - lastAutoRefreshMs < 15000) return;
-      void runFreshSync();
+      scheduleBackgroundSync();
     };
 
     window.addEventListener('focus', handleVisibilityOrFocus);
     document.addEventListener('visibilitychange', handleVisibilityOrFocus);
     return () => {
       cancelled = true;
+      cancelScheduledSync();
       window.removeEventListener('focus', handleVisibilityOrFocus);
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
     };

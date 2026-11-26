@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   ArrowLeft,
   BookOpen,
@@ -18,6 +18,7 @@ import {
   normalizeProductGroup,
 } from '../services/api';
 import { WatchNowButton } from './WatchNowButton';
+import { useDebouncedValue, useWindowedList } from '../hooks/useWindowedList';
 
 type GroupFilterKey = 'all' | ProductGroupCode;
 
@@ -26,8 +27,7 @@ interface ProductsCatalogViewProps {
   onOpenGenericDetailing?: (genericName: string, productId: string) => void;
 }
 
-const INITIAL_RENDER_LIMIT = 60;
-const LOAD_MORE_STEP = 60;
+const WINDOW_PAGE_SIZE = 30;
 
 const GROUP_BADGE_STYLE: Partial<Record<ProductGroupCode, string>> = {
   A: 'bg-[#0D2B45]/10 text-[#0D2B45] dark:bg-[#0E7C7B]/25 dark:text-[#7CE0DF]',
@@ -55,6 +55,232 @@ function formatCompactPricePair(
   };
 }
 
+interface ProductCardRowProps {
+  prod: Product;
+  scriptCount: number;
+  isSuperAdmin: boolean;
+  onOpenBrief: (productId: string) => void;
+  onOpenDetailing: (prod: Product) => void;
+  onEdit: (prod: Product) => void;
+}
+
+const ProductCardRow: React.FC<ProductCardRowProps> = React.memo(
+  ({ prod, scriptCount, isSuperAdmin, onOpenBrief, onOpenDetailing, onEdit }) => {
+    const brandName = prod.Brand_Name || prod.Product_Name || prod.Product_ID;
+    const rawGeneric = String(prod.Generic_Name ?? '').trim();
+    const genericName = rawGeneric || '—';
+    const singlePrice = formatBDT(prod.Single_Price);
+    const boxPrice = formatBDT(prod.Box_Price ?? prod.MRP_BDT);
+    const compactPrice = formatCompactPricePair(
+      prod.Single_Price,
+      prod.Box_Price ?? prod.MRP_BDT
+    );
+    const activeGroup = normalizeProductGroup(prod.Product_Group);
+
+    const inlineMetaParts = [
+      prod.Strength,
+      prod.Dosage_Form,
+      prod.Pack_Size,
+      prod.Therapeutic_Class,
+    ].filter(Boolean);
+
+    return (
+      <article className="px-3.5 sm:px-5 py-2.5 lg:py-3 transition-colors hover:bg-[#F4F8FC]/80 dark:hover:bg-[#133859]/25">
+        {/* DESKTOP ROW (>= lg) */}
+        <div className="hidden lg:grid lg:grid-cols-12 gap-4 items-center">
+          <div className="col-span-4 min-w-0">
+            <button
+              type="button"
+              onClick={() => onOpenBrief(prod.Product_ID)}
+              className="text-left group block max-w-full cursor-pointer"
+            >
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="font-display font-bold text-[15px] text-[#0D2B45] dark:text-white group-hover:text-[#0E7C7B] dark:group-hover:text-[#149A99] transition-colors truncate">
+                  {brandName}
+                </span>
+                {activeGroup && (
+                  <span
+                    className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold tracking-wide shrink-0 ${getGroupBadgeStyle(activeGroup)}`}
+                  >
+                    G-{activeGroup}
+                  </span>
+                )}
+              </div>
+            </button>
+
+            {rawGeneric ? (
+              <div className="text-xs font-medium text-[#0E7C7B] dark:text-[#149A99] truncate max-w-full mt-0.5">
+                {genericName}
+              </div>
+            ) : (
+              <div className="text-xs font-medium text-[#0D2B45]/45 dark:text-[#EBF4FA]/45 truncate mt-0.5">
+                —
+              </div>
+            )}
+
+            {prod.Therapeutic_Class && (
+              <div className="text-[11px] text-[#0D2B45]/55 dark:text-[#EBF4FA]/55 truncate mt-0.5">
+                {prod.Therapeutic_Class}
+              </div>
+            )}
+          </div>
+
+          <div className="col-span-2 min-w-0 text-xs">
+            <div className="font-semibold text-[#0D2B45] dark:text-white truncate">
+              {[prod.Strength, prod.Dosage_Form].filter(Boolean).join(' · ') || '—'}
+            </div>
+            <div className="text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 mt-0.5 font-mono truncate">
+              {prod.Pack_Size || '—'}
+            </div>
+          </div>
+
+          <div className="col-span-2 text-right font-mono tabular-nums">
+            <div className="text-xs text-[#0D2B45] dark:text-white font-semibold">
+              {singlePrice}
+            </div>
+            <div className="text-xs text-[#0E7C7B] dark:text-[#149A99] font-semibold mt-0.5">
+              Box {boxPrice}
+            </div>
+          </div>
+
+          <div className="col-span-4 flex items-center justify-end gap-1.5">
+            <button
+              type="button"
+              onClick={() => onOpenDetailing(prod)}
+              className="min-h-[36px] px-3 py-1 rounded-xl bg-[#0E7C7B] hover:bg-[#095C5B] text-white text-xs font-semibold inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              <span>Detailing</span>
+              {scriptCount > 0 && (
+                <span className="font-mono tabular-nums text-[11px] text-white/85">
+                  ({scriptCount})
+                </span>
+              )}
+            </button>
+
+            <WatchNowButton
+              videoUrl={prod.Video_URL}
+              fallbackUrl={prod.YouTube_URL}
+              size="card"
+            />
+
+            {isSuperAdmin && (
+              <button
+                type="button"
+                onClick={() => onEdit(prod)}
+                aria-label={`Edit ${brandName}`}
+                title={`Edit ${brandName}`}
+                className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-xl border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-[#0D2B45]/70 dark:text-[#EBF4FA]/75 hover:border-[#0E7C7B] hover:text-[#0E7C7B] dark:hover:text-[#7CE0DF] shrink-0 transition-colors cursor-pointer"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* SLIM ULTRA-CLEAN MOBILE CARD (< lg) */}
+        <div className="lg:hidden space-y-1.5">
+          {/* Row 1: Brand + Clean G-A..G-O Badge (left) | Compact Single & Box Price (right) */}
+          <div className="flex items-baseline justify-between gap-2">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <button
+                type="button"
+                onClick={() => onOpenBrief(prod.Product_ID)}
+                className="font-display font-bold text-[15px] text-[#0D2B45] dark:text-white hover:text-[#0E7C7B] dark:hover:text-[#149A99] text-left truncate leading-snug cursor-pointer"
+              >
+                {brandName}
+              </button>
+              {activeGroup && (
+                <span
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold leading-none shrink-0 ${getGroupBadgeStyle(activeGroup)}`}
+                >
+                  G-{activeGroup}
+                </span>
+              )}
+            </div>
+
+            {(compactPrice.single || compactPrice.box) && (
+              <div className="text-[11.5px] font-mono tabular-nums whitespace-nowrap shrink-0">
+                {compactPrice.single && (
+                  <span className="font-bold text-[#0D2B45] dark:text-white">
+                    {compactPrice.single}
+                  </span>
+                )}
+                {compactPrice.single && compactPrice.box && (
+                  <span className="text-[#0D2B45]/35 dark:text-[#EBF4FA]/35 mx-1">·</span>
+                )}
+                {compactPrice.box && (
+                  <span className="font-semibold text-[#0E7C7B] dark:text-[#149A99]">
+                    Box {compactPrice.box}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Row 2: Teal Generic Name + compact Strength / Form / Pack / Class */}
+          <div className="text-[11.5px] leading-snug text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
+            {rawGeneric ? (
+              <span className="font-semibold text-[#0E7C7B] dark:text-[#149A99]">
+                {genericName}
+              </span>
+            ) : (
+              <span className="font-medium text-[#0D2B45]/45 dark:text-[#EBF4FA]/45">—</span>
+            )}
+
+            {inlineMetaParts.length > 0 && (
+              <>
+                <span aria-hidden="true" className="text-[#0D2B45]/30 dark:text-[#EBF4FA]/30">
+                  ·
+                </span>
+                <span className="min-w-0 break-words">{inlineMetaParts.join(' · ')}</span>
+              </>
+            )}
+          </div>
+
+          {/* Row 3: Sleek 50% / 50% Action Row — Detailing (left) | Watch Now (right) + Admin-only Edit */}
+          <div className="flex items-center gap-2 pt-0.5">
+            <div className="grid grid-cols-2 gap-2 flex-1 min-w-0">
+              <button
+                type="button"
+                onClick={() => onOpenDetailing(prod)}
+                className="w-full min-h-[38px] px-2.5 rounded-xl bg-[#0E7C7B] hover:bg-[#095C5B] text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors active:scale-[0.98] cursor-pointer"
+              >
+                <BookOpen className="w-3.5 h-3.5 shrink-0" />
+                <span>Detailing</span>
+                {scriptCount > 0 && (
+                  <span className="font-mono tabular-nums text-[11px] text-white/85">
+                    ({scriptCount})
+                  </span>
+                )}
+              </button>
+
+              <WatchNowButton
+                videoUrl={prod.Video_URL}
+                fallbackUrl={prod.YouTube_URL}
+                size="full"
+              />
+            </div>
+
+            {isSuperAdmin && (
+              <button
+                type="button"
+                onClick={() => onEdit(prod)}
+                aria-label={`Edit ${brandName}`}
+                title={`Edit ${brandName}`}
+                className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 bg-[#F4F8FC] dark:bg-[#071522] text-[#0D2B45]/75 dark:text-[#EBF4FA]/80 hover:border-[#0E7C7B] hover:text-[#0E7C7B] shrink-0 transition-colors active:scale-[0.97] cursor-pointer"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+      </article>
+    );
+  }
+);
+ProductCardRow.displayName = 'ProductCardRow';
+
 export const ProductsCatalogView: React.FC<ProductsCatalogViewProps> = ({
   embedded = false,
   onOpenGenericDetailing,
@@ -73,12 +299,9 @@ export const ProductsCatalogView: React.FC<ProductsCatalogViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [dosageFormFilter, setDosageFormFilter] = useState('');
   const [classFilter, setClassFilter] = useState('');
-  const [visibleLimit, setVisibleLimit] = useState(INITIAL_RENDER_LIMIT);
 
-  // Reset rendered chunk size when filters change
-  useEffect(() => {
-    setVisibleLimit(INITIAL_RENDER_LIMIT);
-  }, [groupFilter, searchQuery, dosageFormFilter, classFilter]);
+  // Debounce keystrokes by 150ms so searching 800+ products stays butter-smooth on mobile
+  const debouncedSearch = useDebouncedValue(searchQuery, 150);
 
   // Map normalized generic name -> saved detailing script count
   const genericScriptCountMap = useMemo(() => {
@@ -90,22 +313,49 @@ export const ProductsCatalogView: React.FC<ProductsCatalogViewProps> = ({
     return map;
   }, [dataset.Products, dataset.Doctor_Product_Detailing]);
 
+  // Precompute normalized filter fields + lowercased search haystack once per product load
+  const indexedProducts = useMemo(
+    () =>
+      dataset.Products.map((prod) => {
+        const brandName = prod.Brand_Name || prod.Product_Name || prod.Product_ID;
+        return {
+          prod,
+          group: normalizeProductGroup(prod.Product_Group),
+          dosageForm: String(prod.Dosage_Form ?? '').trim(),
+          therapeuticClass: String(prod.Therapeutic_Class ?? '').trim(),
+          genericKey: normalizeGenericKey(prod.Generic_Name || brandName),
+          haystack: [
+            prod.Brand_Name,
+            prod.Product_Name,
+            prod.Generic_Name,
+            prod.Strength,
+            prod.Dosage_Form,
+            prod.Therapeutic_Class,
+            prod.Approved_Indications,
+            prod.Product_Group,
+            prod.Product_ID,
+          ]
+            .map((v) => String(v ?? '').toLowerCase())
+            .join(' '),
+        };
+      }),
+    [dataset.Products]
+  );
+
   const uniqueGenericsCount = useMemo(() => {
     const keys = new Set<string>();
-    dataset.Products.forEach((p) => {
-      const k = normalizeGenericKey(p.Generic_Name || p.Brand_Name || p.Product_Name);
-      if (k) keys.add(k);
+    indexedProducts.forEach((item) => {
+      if (item.genericKey) keys.add(item.genericKey);
     });
     return keys.size;
-  }, [dataset.Products]);
+  }, [indexedProducts]);
 
   // Dynamic Group dropdown options populated from catalog
   const groupOptions = useMemo(() => {
     const counts = new Map<ProductGroupCode, number>();
-    dataset.Products.forEach((p) => {
-      const code = normalizeProductGroup(p.Product_Group);
-      if (code) {
-        counts.set(code, (counts.get(code) || 0) + 1);
+    indexedProducts.forEach((item) => {
+      if (item.group) {
+        counts.set(item.group, (counts.get(item.group) || 0) + 1);
       }
     });
     return GROUP_ORDER.map((code) => ({
@@ -113,87 +363,85 @@ export const ProductsCatalogView: React.FC<ProductsCatalogViewProps> = ({
       label: `Group ${code}`,
       count: counts.get(code) || 0,
     })).filter((item) => item.count > 0);
-  }, [dataset.Products]);
+  }, [indexedProducts]);
 
   const dosageForms = useMemo(() => {
     const set = new Set<string>();
-    dataset.Products.forEach((p) => {
-      const df = String(p.Dosage_Form ?? '').trim();
-      if (df) set.add(df);
+    indexedProducts.forEach((item) => {
+      if (item.dosageForm) set.add(item.dosageForm);
     });
     return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [dataset.Products]);
+  }, [indexedProducts]);
 
   const therapeuticClasses = useMemo(() => {
     const set = new Set<string>();
-    dataset.Products.forEach((p) => {
-      const tc = String(p.Therapeutic_Class ?? '').trim();
-      if (tc) set.add(tc);
+    indexedProducts.forEach((item) => {
+      if (item.therapeuticClass) set.add(item.therapeuticClass);
     });
     return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [dataset.Products]);
+  }, [indexedProducts]);
 
+  // Search & filter across ALL 800+ products in memory
   const filteredProducts = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return dataset.Products.filter((prod) => {
-      const prodGroup = normalizeProductGroup(prod.Product_Group);
-      if (groupFilter !== 'all' && prodGroup !== groupFilter) {
-        return false;
-      }
-      if (dosageFormFilter && String(prod.Dosage_Form ?? '').trim() !== dosageFormFilter) {
-        return false;
-      }
-      if (classFilter && String(prod.Therapeutic_Class ?? '').trim() !== classFilter) {
-        return false;
-      }
+    const q = debouncedSearch.trim().toLowerCase();
+    return indexedProducts.filter((item) => {
+      if (groupFilter !== 'all' && item.group !== groupFilter) return false;
+      if (dosageFormFilter && item.dosageForm !== dosageFormFilter) return false;
+      if (classFilter && item.therapeuticClass !== classFilter) return false;
       if (!q) return true;
-      return (
-        String(prod.Brand_Name ?? '').toLowerCase().includes(q) ||
-        String(prod.Product_Name ?? '').toLowerCase().includes(q) ||
-        String(prod.Generic_Name ?? '').toLowerCase().includes(q) ||
-        String(prod.Strength ?? '').toLowerCase().includes(q) ||
-        String(prod.Dosage_Form ?? '').toLowerCase().includes(q) ||
-        String(prod.Therapeutic_Class ?? '').toLowerCase().includes(q) ||
-        String(prod.Approved_Indications ?? '').toLowerCase().includes(q) ||
-        String(prod.Product_Group ?? '').toLowerCase().includes(q) ||
-        String(prod.Product_ID ?? '').toLowerCase().includes(q)
-      );
+      return item.haystack.includes(q);
     });
-  }, [dataset.Products, groupFilter, searchQuery, dosageFormFilter, classFilter]);
+  }, [indexedProducts, groupFilter, debouncedSearch, dosageFormFilter, classFilter]);
 
-  // Windowed slice keeps DOM snappy even with 800+ products
-  const displayedProducts = useMemo(
-    () => filteredProducts.slice(0, visibleLimit),
-    [filteredProducts, visibleLimit]
+  // Render only first 30 matching cards immediately (<100ms), auto-load 30 more on scroll
+  const {
+    visibleItems: displayedProducts,
+    hasMore,
+    remainingCount: remainingToLoad,
+    loadMore,
+    showAll,
+    sentinelRef,
+  } = useWindowedList(
+    filteredProducts,
+    `${groupFilter}|${debouncedSearch}|${dosageFormFilter}|${classFilter}`,
+    WINDOW_PAGE_SIZE
   );
 
   const hasActiveFilters = Boolean(
     searchQuery.trim() || groupFilter !== 'all' || dosageFormFilter || classFilter
   );
 
-  const handleResetFilters = () => {
+  const handleResetFilters = useCallback(() => {
     setSearchQuery('');
     setGroupFilter('all');
     setDosageFormFilter('');
     setClassFilter('');
-  };
+  }, []);
 
-  const handleOpenGenericDetailing = (prod: Product) => {
-    const targetGeneric =
-      String(prod.Generic_Name ?? '').trim() ||
-      String(prod.Brand_Name || prod.Product_Name || '').trim();
-    if (onOpenGenericDetailing) {
-      onOpenGenericDetailing(targetGeneric, prod.Product_ID);
-      return;
-    }
-    startDetailingFlow({
-      genericName: targetGeneric,
-      productId: prod.Product_ID,
-      subTab: 'detailing',
-    });
-  };
+  const handleOpenGenericDetailing = useCallback(
+    (prod: Product) => {
+      const targetGeneric =
+        String(prod.Generic_Name ?? '').trim() ||
+        String(prod.Brand_Name || prod.Product_Name || '').trim();
+      if (onOpenGenericDetailing) {
+        onOpenGenericDetailing(targetGeneric, prod.Product_ID);
+        return;
+      }
+      startDetailingFlow({
+        genericName: targetGeneric,
+        productId: prod.Product_ID,
+        subTab: 'detailing',
+      });
+    },
+    [onOpenGenericDetailing, startDetailingFlow]
+  );
 
-  const remainingToLoad = Math.max(0, filteredProducts.length - displayedProducts.length);
+  const handleEditProduct = useCallback(
+    (prod: Product) => {
+      openEditModal('Products', prod as unknown as Record<string, unknown>);
+    },
+    [openEditModal]
+  );
 
   return (
     <div className="space-y-3">
@@ -409,254 +657,44 @@ export const ProductsCatalogView: React.FC<ProductsCatalogViewProps> = ({
           </div>
 
           <div className="divide-y divide-[#0D2B45]/8 dark:divide-[#EBF4FA]/8">
-            {displayedProducts.map((prod, idx) => {
+            {displayedProducts.map((item, idx) => {
+              const { prod, genericKey } = item;
               const brandName = prod.Brand_Name || prod.Product_Name || prod.Product_ID;
-              const rawGeneric = String(prod.Generic_Name ?? '').trim();
-              const genericName = rawGeneric || '—';
-              const genericKey = normalizeGenericKey(prod.Generic_Name || brandName);
-              const scriptCount = genericScriptCountMap.get(genericKey) || 0;
-              const singlePrice = formatBDT(prod.Single_Price);
-              const boxPrice = formatBDT(prod.Box_Price ?? prod.MRP_BDT);
-              const compactPrice = formatCompactPricePair(
-                prod.Single_Price,
-                prod.Box_Price ?? prod.MRP_BDT
-              );
-              const activeGroup = normalizeProductGroup(prod.Product_Group);
               const cardKey = prod.Product_ID || `${brandName}-${idx}`;
-
-              const inlineMetaParts = [
-                prod.Strength,
-                prod.Dosage_Form,
-                prod.Pack_Size,
-                prod.Therapeutic_Class,
-              ].filter(Boolean);
-
               return (
-                <article
+                <ProductCardRow
                   key={`${cardKey}-${idx}`}
-                  className="px-3.5 sm:px-5 py-2.5 lg:py-3 transition-colors hover:bg-[#F4F8FC]/80 dark:hover:bg-[#133859]/25"
-                >
-                  {/* ======================================================= */}
-                  {/* DESKTOP ROW (>= lg)                                     */}
-                  {/* ======================================================= */}
-                  <div className="hidden lg:grid lg:grid-cols-12 gap-4 items-center">
-                    <div className="col-span-4 min-w-0">
-                      <button
-                        type="button"
-                        onClick={() => openProductBrief(prod.Product_ID)}
-                        className="text-left group block max-w-full cursor-pointer"
-                      >
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          <span className="font-display font-bold text-[15px] text-[#0D2B45] dark:text-white group-hover:text-[#0E7C7B] dark:group-hover:text-[#149A99] transition-colors truncate">
-                            {brandName}
-                          </span>
-                          {activeGroup && (
-                            <span
-                              className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold tracking-wide shrink-0 ${getGroupBadgeStyle(activeGroup)}`}
-                            >
-                              G-{activeGroup}
-                            </span>
-                          )}
-                        </div>
-                      </button>
-
-                      {rawGeneric ? (
-                        <div className="text-xs font-medium text-[#0E7C7B] dark:text-[#149A99] truncate max-w-full mt-0.5">
-                          {genericName}
-                        </div>
-                      ) : (
-                        <div className="text-xs font-medium text-[#0D2B45]/45 dark:text-[#EBF4FA]/45 truncate mt-0.5">
-                          —
-                        </div>
-                      )}
-
-                      {prod.Therapeutic_Class && (
-                        <div className="text-[11px] text-[#0D2B45]/55 dark:text-[#EBF4FA]/55 truncate mt-0.5">
-                          {prod.Therapeutic_Class}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="col-span-2 min-w-0 text-xs">
-                      <div className="font-semibold text-[#0D2B45] dark:text-white truncate">
-                        {[prod.Strength, prod.Dosage_Form].filter(Boolean).join(' · ') || '—'}
-                      </div>
-                      <div className="text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 mt-0.5 font-mono truncate">
-                        {prod.Pack_Size || '—'}
-                      </div>
-                    </div>
-
-                    <div className="col-span-2 text-right font-mono tabular-nums">
-                      <div className="text-xs text-[#0D2B45] dark:text-white font-semibold">
-                        {singlePrice}
-                      </div>
-                      <div className="text-xs text-[#0E7C7B] dark:text-[#149A99] font-semibold mt-0.5">
-                        Box {boxPrice}
-                      </div>
-                    </div>
-
-                    <div className="col-span-4 flex items-center justify-end gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenGenericDetailing(prod)}
-                        className="min-h-[36px] px-3 py-1 rounded-xl bg-[#0E7C7B] hover:bg-[#095C5B] text-white text-xs font-semibold inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
-                      >
-                        <BookOpen className="w-3.5 h-3.5" />
-                        <span>Detailing</span>
-                        {scriptCount > 0 && (
-                          <span className="font-mono tabular-nums text-[11px] text-white/85">
-                            ({scriptCount})
-                          </span>
-                        )}
-                      </button>
-
-                      <WatchNowButton
-                        videoUrl={prod.Video_URL}
-                        fallbackUrl={prod.YouTube_URL}
-                        size="card"
-                      />
-
-                      {isSuperAdmin && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            openEditModal('Products', prod as unknown as Record<string, unknown>)
-                          }
-                          aria-label={`Edit ${brandName}`}
-                          title={`Edit ${brandName}`}
-                          className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-xl border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-[#0D2B45]/70 dark:text-[#EBF4FA]/75 hover:border-[#0E7C7B] hover:text-[#0E7C7B] dark:hover:text-[#7CE0DF] shrink-0 transition-colors cursor-pointer"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* ======================================================= */}
-                  {/* SLIM ULTRA-CLEAN MOBILE CARD (< lg)                     */}
-                  {/* ======================================================= */}
-                  <div className="lg:hidden space-y-1.5">
-                    {/* Row 1: Brand + Clean G-A..G-O Badge (left) | Compact Single & Box Price (right) */}
-                    <div className="flex items-baseline justify-between gap-2">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <button
-                          type="button"
-                          onClick={() => openProductBrief(prod.Product_ID)}
-                          className="font-display font-bold text-[15px] text-[#0D2B45] dark:text-white hover:text-[#0E7C7B] dark:hover:text-[#149A99] text-left truncate leading-snug cursor-pointer"
-                        >
-                          {brandName}
-                        </button>
-                        {activeGroup && (
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold leading-none shrink-0 ${getGroupBadgeStyle(activeGroup)}`}
-                          >
-                            G-{activeGroup}
-                          </span>
-                        )}
-                      </div>
-
-                      {(compactPrice.single || compactPrice.box) && (
-                        <div className="text-[11.5px] font-mono tabular-nums whitespace-nowrap shrink-0">
-                          {compactPrice.single && (
-                            <span className="font-bold text-[#0D2B45] dark:text-white">
-                              {compactPrice.single}
-                            </span>
-                          )}
-                          {compactPrice.single && compactPrice.box && (
-                            <span className="text-[#0D2B45]/35 dark:text-[#EBF4FA]/35 mx-1">·</span>
-                          )}
-                          {compactPrice.box && (
-                            <span className="font-semibold text-[#0E7C7B] dark:text-[#149A99]">
-                              Box {compactPrice.box}
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Row 2: Teal Generic Name + compact Strength / Form / Pack / Class */}
-                    <div className="text-[11.5px] leading-snug text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5">
-                      {rawGeneric ? (
-                        <span className="font-semibold text-[#0E7C7B] dark:text-[#149A99]">
-                          {genericName}
-                        </span>
-                      ) : (
-                        <span className="font-medium text-[#0D2B45]/45 dark:text-[#EBF4FA]/45">—</span>
-                      )}
-
-                      {inlineMetaParts.length > 0 && (
-                        <>
-                          <span aria-hidden="true" className="text-[#0D2B45]/30 dark:text-[#EBF4FA]/30">
-                            ·
-                          </span>
-                          <span className="min-w-0 break-words">
-                            {inlineMetaParts.join(' · ')}
-                          </span>
-                        </>
-                      )}
-                    </div>
-
-                    {/* Row 3: Sleek 50% / 50% Action Row — Detailing (left) | Watch Now (right) + Admin-only Edit */}
-                    <div className="flex items-center gap-2 pt-0.5">
-                      <div className="grid grid-cols-2 gap-2 flex-1 min-w-0">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenGenericDetailing(prod)}
-                          className="w-full min-h-[38px] px-2.5 rounded-xl bg-[#0E7C7B] hover:bg-[#095C5B] text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors active:scale-[0.98] cursor-pointer"
-                        >
-                          <BookOpen className="w-3.5 h-3.5 shrink-0" />
-                          <span>Detailing</span>
-                          {scriptCount > 0 && (
-                            <span className="font-mono tabular-nums text-[11px] text-white/85">
-                              ({scriptCount})
-                            </span>
-                          )}
-                        </button>
-
-                        <WatchNowButton
-                          videoUrl={prod.Video_URL}
-                          fallbackUrl={prod.YouTube_URL}
-                          size="full"
-                        />
-                      </div>
-
-                      {isSuperAdmin && (
-                        <button
-                          type="button"
-                          onClick={() =>
-                            openEditModal('Products', prod as unknown as Record<string, unknown>)
-                          }
-                          aria-label={`Edit ${brandName}`}
-                          title={`Edit ${brandName}`}
-                          className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 bg-[#F4F8FC] dark:bg-[#071522] text-[#0D2B45]/75 dark:text-[#EBF4FA]/80 hover:border-[#0E7C7B] hover:text-[#0E7C7B] shrink-0 transition-colors active:scale-[0.97] cursor-pointer"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </article>
+                  prod={prod}
+                  scriptCount={genericScriptCountMap.get(genericKey) || 0}
+                  isSuperAdmin={isSuperAdmin}
+                  onOpenBrief={openProductBrief}
+                  onOpenDetailing={handleOpenGenericDetailing}
+                  onEdit={handleEditProduct}
+                />
               );
             })}
           </div>
 
-          {/* Load More Footer (keeps DOM fast with 60-item chunks) */}
-          {remainingToLoad > 0 && (
-            <div className="px-4 sm:px-5 py-3 bg-[#F4F8FC]/70 dark:bg-[#0A1C2D] border-t border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 flex flex-wrap items-center justify-between gap-2.5">
+          {/* Auto-load IntersectionObserver sentinel + Load More fallback */}
+          {hasMore && (
+            <div
+              ref={sentinelRef}
+              className="px-4 sm:px-5 py-3 bg-[#F4F8FC]/70 dark:bg-[#0A1C2D] border-t border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 flex flex-wrap items-center justify-between gap-2.5"
+            >
               <span className="text-xs text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 tabular-nums">
                 Showing {displayedProducts.length} of {filteredProducts.length} matching products
               </span>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setVisibleLimit((prev) => prev + LOAD_MORE_STEP)}
+                  onClick={loadMore}
                   className="min-h-[40px] sm:min-h-[36px] px-3.5 py-1.5 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 hover:border-[#0E7C7B] text-xs font-semibold text-[#0D2B45] dark:text-white transition-colors cursor-pointer"
                 >
-                  Load {Math.min(LOAD_MORE_STEP, remainingToLoad)} More
+                  Load {Math.min(WINDOW_PAGE_SIZE, remainingToLoad)} More
                 </button>
                 <button
                   type="button"
-                  onClick={() => setVisibleLimit(filteredProducts.length)}
+                  onClick={showAll}
                   className="min-h-[40px] sm:min-h-[36px] px-3.5 py-1.5 rounded-xl bg-[#EBF4FA] dark:bg-[#133859] hover:bg-[#dcecf7] dark:hover:bg-[#1C4A73] text-xs font-semibold text-[#0D2B45] dark:text-white transition-colors cursor-pointer"
                 >
                   Show All ({filteredProducts.length})

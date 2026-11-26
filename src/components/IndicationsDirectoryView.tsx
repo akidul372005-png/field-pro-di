@@ -42,12 +42,88 @@ import {
   scriptMatchesGenericGroup,
 } from '../services/api';
 
+import { useDebouncedValue, useWindowedList } from '../hooks/useWindowedList';
+
 interface IndicationsDirectoryViewProps {
   embedded?: boolean;
 }
 
 type DirectorySection = 'indications' | 'specialists';
 type IndicationDrawerTab = 'guide' | 'specialists' | 'generics';
+
+const WINDOW_PAGE_SIZE = 30;
+
+interface IndicationCardProps {
+  indication: Indication;
+  category: string;
+  specialists: string[];
+  generics: string[];
+  onOpen: (ind: Indication) => void;
+}
+
+const IndicationCard: React.FC<IndicationCardProps> = React.memo(
+  ({ indication, category, specialists, generics, onOpen }) => (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(indication)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen(indication);
+        }
+      }}
+      className="group cursor-pointer rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 hover:border-[#0E7C7B] p-4 flex flex-col justify-between transition-colors focus-visible:outline-2 focus-visible:outline-[#0E7C7B]"
+    >
+      <div className="min-w-0">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] font-mono text-[#0D2B45]/50 dark:text-[#EBF4FA]/50 truncate">
+            {indication.Indication_ID || '—'}
+          </span>
+          <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-[#EBF4FA] text-[#0E7C7B] dark:bg-[#0E7C7B]/20 dark:text-[#8EEAE8] truncate max-w-[65%]">
+            {category}
+          </span>
+        </div>
+
+        <h2 className="font-display font-bold text-base text-[#0D2B45] dark:text-white group-hover:text-[#0E7C7B] dark:group-hover:text-[#149A99] transition-colors mt-1.5 leading-snug">
+          {indication.Indication_Name}
+        </h2>
+
+        {generics.length > 0 && (
+          <p className="text-xs text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 mt-1.5 truncate">
+            {generics.slice(0, 4).join(', ')}
+            {generics.length > 4 ? ` +${generics.length - 4}` : ''}
+          </p>
+        )}
+      </div>
+
+      <div className="mt-4 pt-3 border-t border-[#0D2B45]/8 dark:border-[#EBF4FA]/8 flex items-center justify-between gap-2">
+        <div className="text-xs font-medium text-[#0D2B45]/70 dark:text-[#EBF4FA]/75 tabular-nums min-w-0 truncate">
+          <span className="font-semibold text-[#0D2B45] dark:text-white">
+            {specialists.length} specialist{specialists.length === 1 ? '' : 's'}
+          </span>
+          <span className="mx-1.5 text-[#0D2B45]/30 dark:text-[#EBF4FA]/30">·</span>
+          <span className="font-semibold text-[#0E7C7B] dark:text-[#149A99]">
+            {generics.length} generic{generics.length === 1 ? '' : 's'}
+          </span>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <WatchNowButton
+            videoUrl={indication.Video_URL}
+            fallbackUrl={indication.YouTube_URL}
+            size="compact"
+          />
+          <span className="inline-flex items-center gap-0.5 text-xs font-semibold text-[#0E7C7B] dark:text-[#149A99] group-hover:translate-x-0.5 transition-transform whitespace-nowrap shrink-0">
+            <span>Details</span>
+            <ChevronRight className="w-3.5 h-3.5" />
+          </span>
+        </div>
+      </div>
+    </div>
+  )
+);
+IndicationCard.displayName = 'IndicationCard';
 
 export const IndicationsDirectoryView: React.FC<IndicationsDirectoryViewProps> = ({
   embedded = false,
@@ -197,37 +273,59 @@ export const IndicationsDirectoryView: React.FC<IndicationsDirectoryViewProps> =
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
   }, [activeIndications]);
 
-  // Enrich each indication with parsed lists for instant card display & filtering
+  // Debounce indication search by 150ms for lag-free typing across all 500 indications
+  const debouncedSearch = useDebouncedValue(searchQuery, 150);
+
+  // Enrich each indication with parsed lists + precomputed search haystack
   const enrichedIndications = useMemo(() => {
     return activeIndications.map((ind) => {
       const specialists = parseCommaList(ind.Relevant_Specialists);
       const generics = parseCommaList(ind.Key_Generics);
       const category = String(ind.Category ?? '').trim() || 'General';
+      const haystack = [
+        ind.Indication_ID,
+        ind.Indication_Name,
+        category,
+        ind.Relevant_Specialists,
+        ind.Key_Generics,
+      ]
+        .map((v) => String(v ?? '').toLowerCase())
+        .join(' ');
       return {
         indication: ind,
         category,
         specialists,
         generics,
+        haystack,
       };
     });
   }, [activeIndications]);
 
   const filteredIndications = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
+    const q = debouncedSearch.trim().toLowerCase();
+    const catLower = selectedCategory.toLowerCase();
     return enrichedIndications.filter((item) => {
-      if (selectedCategory !== 'ALL' && item.category.toLowerCase() !== selectedCategory.toLowerCase()) {
+      if (selectedCategory !== 'ALL' && item.category.toLowerCase() !== catLower) {
         return false;
       }
       if (!q) return true;
-      return (
-        String(item.indication.Indication_ID ?? '').toLowerCase().includes(q) ||
-        String(item.indication.Indication_Name ?? '').toLowerCase().includes(q) ||
-        item.category.toLowerCase().includes(q) ||
-        String(item.indication.Relevant_Specialists ?? '').toLowerCase().includes(q) ||
-        String(item.indication.Key_Generics ?? '').toLowerCase().includes(q)
-      );
+      return item.haystack.includes(q);
     });
-  }, [enrichedIndications, searchQuery, selectedCategory]);
+  }, [enrichedIndications, debouncedSearch, selectedCategory]);
+
+  // Render first 30 matching indication cards immediately (<100ms), auto-append 30 on scroll
+  const {
+    visibleItems: visibleIndications,
+    hasMore: hasMoreIndications,
+    remainingCount: remainingIndications,
+    loadMore: loadMoreIndications,
+    showAll: showAllIndications,
+    sentinelRef: indicationsSentinelRef,
+  } = useWindowedList(
+    filteredIndications,
+    `${debouncedSearch}|${selectedCategory}`,
+    WINDOW_PAGE_SIZE
+  );
 
   const selectedEntry = useMemo(() => {
     if (!selectedIndicationId) return null;
@@ -476,10 +574,10 @@ export const IndicationsDirectoryView: React.FC<IndicationsDirectoryViewProps> =
     };
   };
 
-  const handleOpenIndication = (ind: Indication) => {
+  const handleOpenIndication = useCallback((ind: Indication) => {
     setDrawerTab('guide');
     setSelectedIndicationId(ind.Indication_ID || ind.Indication_Name);
-  };
+  }, []);
 
   return (
     <div className="space-y-4">
@@ -689,72 +787,49 @@ export const IndicationsDirectoryView: React.FC<IndicationsDirectoryViewProps> =
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
-          {filteredIndications.map((item, idx) => {
-            const { indication, category, specialists, generics } = item;
-            const keyId = indication.Indication_ID || indication.Indication_Name;
-            return (
-              <div
-                key={`ind-card-${keyId}-${idx}`}
-                role="button"
-                tabIndex={0}
-                onClick={() => handleOpenIndication(indication)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    handleOpenIndication(indication);
-                  }
-                }}
-                className="group cursor-pointer rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 hover:border-[#0E7C7B] p-4 flex flex-col justify-between transition-colors focus-visible:outline-2 focus-visible:outline-[#0E7C7B]"
-              >
-                <div className="min-w-0">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-mono text-[#0D2B45]/50 dark:text-[#EBF4FA]/50 truncate">
-                      {indication.Indication_ID || '—'}
-                    </span>
-                    <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-[#EBF4FA] text-[#0E7C7B] dark:bg-[#0E7C7B]/20 dark:text-[#8EEAE8] truncate max-w-[65%]">
-                      {category}
-                    </span>
-                  </div>
+        <div className="space-y-3.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            {visibleIndications.map((item, idx) => {
+              const keyId = item.indication.Indication_ID || item.indication.Indication_Name;
+              return (
+                <IndicationCard
+                  key={`ind-card-${keyId}-${idx}`}
+                  indication={item.indication}
+                  category={item.category}
+                  specialists={item.specialists}
+                  generics={item.generics}
+                  onOpen={handleOpenIndication}
+                />
+              );
+            })}
+          </div>
 
-                  <h2 className="font-display font-bold text-base text-[#0D2B45] dark:text-white group-hover:text-[#0E7C7B] dark:group-hover:text-[#149A99] transition-colors mt-1.5 leading-snug">
-                    {indication.Indication_Name}
-                  </h2>
-
-                  {generics.length > 0 && (
-                    <p className="text-xs text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 mt-1.5 truncate">
-                      {generics.slice(0, 4).join(', ')}
-                      {generics.length > 4 ? ` +${generics.length - 4}` : ''}
-                    </p>
-                  )}
-                </div>
-
-                <div className="mt-4 pt-3 border-t border-[#0D2B45]/8 dark:border-[#EBF4FA]/8 flex items-center justify-between gap-2">
-                  <div className="text-xs font-medium text-[#0D2B45]/70 dark:text-[#EBF4FA]/75 tabular-nums min-w-0 truncate">
-                    <span className="font-semibold text-[#0D2B45] dark:text-white">
-                      {specialists.length} specialist{specialists.length === 1 ? '' : 's'}
-                    </span>
-                    <span className="mx-1.5 text-[#0D2B45]/30 dark:text-[#EBF4FA]/30">·</span>
-                    <span className="font-semibold text-[#0E7C7B] dark:text-[#149A99]">
-                      {generics.length} generic{generics.length === 1 ? '' : 's'}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0">
-                    <WatchNowButton
-                      videoUrl={indication.Video_URL}
-                      fallbackUrl={indication.YouTube_URL}
-                      size="compact"
-                    />
-                    <span className="inline-flex items-center gap-0.5 text-xs font-semibold text-[#0E7C7B] dark:text-[#149A99] group-hover:translate-x-0.5 transition-transform whitespace-nowrap shrink-0">
-                      <span>Details</span>
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    </span>
-                  </div>
-                </div>
+          {hasMoreIndications && (
+            <div
+              ref={indicationsSentinelRef}
+              className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 px-4 py-3 flex flex-wrap items-center justify-between gap-2.5"
+            >
+              <span className="text-xs text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 tabular-nums">
+                Showing {visibleIndications.length} of {filteredIndications.length} indications
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={loadMoreIndications}
+                  className="min-h-[40px] sm:min-h-[36px] px-3.5 py-1.5 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 hover:border-[#0E7C7B] text-xs font-semibold text-[#0D2B45] dark:text-white transition-colors cursor-pointer"
+                >
+                  Load {Math.min(WINDOW_PAGE_SIZE, remainingIndications)} More
+                </button>
+                <button
+                  type="button"
+                  onClick={showAllIndications}
+                  className="min-h-[40px] sm:min-h-[36px] px-3.5 py-1.5 rounded-xl bg-[#EBF4FA] dark:bg-[#133859] hover:bg-[#dcecf7] dark:hover:bg-[#1C4A73] text-xs font-semibold text-[#0D2B45] dark:text-white transition-colors cursor-pointer"
+                >
+                  Show All ({filteredIndications.length})
+                </button>
               </div>
-            );
-          })}
+            </div>
+          )}
         </div>
       )}
         </>

@@ -76,10 +76,22 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     }
   };
 
+  const isHomeDashboard = activeTab === 'dashboard';
+
   return (
-    <div className="min-h-screen flex flex-col overflow-x-clip bg-[#F4F8FC] dark:bg-[#071522] text-[#0D2B45] dark:text-[#EBF4FA] transition-colors">
-      {/* Top Bar: Deep-navy-to-teal gradient header */}
-      <header className="sticky top-0 z-30 h-[50px] md:h-16 bg-gradient-to-r from-[#071D33] via-[#0D2B45] to-[#0E7C7B] text-white border-b border-white/10 shadow-sm pt-safe">
+    <div
+      className={`min-h-screen flex flex-col overflow-x-clip ${
+        isHomeDashboard
+          ? 'bg-[#EAF4FB] dark:bg-[#071522]'
+          : 'bg-[#F4F8FC] dark:bg-[#071522]'
+      } text-[#0D2B45] dark:text-[#EBF4FA] transition-colors`}
+    >
+      {/* Top Bar: Deep-navy-to-teal gradient header (hidden on mobile Home where the Curved Wave Header sits seamlessly at top) */}
+      <header
+        className={`${
+          isHomeDashboard ? 'hidden md:block' : 'block'
+        } sticky top-0 z-30 h-[52px] md:h-16 bg-gradient-to-r from-[#071D33] via-[#0D2B45] to-[#0E7C7B] text-white border-b border-white/10 shadow-sm pt-safe`}
+      >
         <div className="max-w-7xl mx-auto h-full px-3.5 sm:px-6 flex items-center justify-between gap-2.5 md:gap-6">
           {/* Zone 1: Brand Title — tapping ALWAYS navigates back to Home/Dashboard */}
           <div className="flex items-center gap-2.5 min-w-0 shrink-0">
@@ -250,19 +262,19 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         </div>
       </header>
 
-      {/* Main Content Viewport (tight zero-scroll fit on mobile Home, generous spacing elsewhere) */}
+      {/* Main Content Viewport (full-bleed curved wave header on mobile Home, generous spacing elsewhere) */}
       <main
-        className={`flex-1 w-full max-w-7xl mx-auto px-3.5 sm:px-6 ${
-          activeTab === 'dashboard'
-            ? 'pt-2.5 pb-[72px] sm:pt-5 md:pb-10'
-            : 'pt-3 sm:pt-5 pb-12 md:pb-10'
+        className={`flex-1 w-full ${
+          isHomeDashboard
+            ? 'md:max-w-7xl md:mx-auto px-0 md:px-6 pt-0 pb-[66px] md:pt-5 md:pb-10'
+            : 'max-w-7xl mx-auto px-3.5 sm:px-6 pt-3 sm:pt-5 pb-12 md:pb-10'
         }`}
       >
         {children}
       </main>
 
-      {/* Minimal Global Brand Footer (hidden on mobile Home since Home includes the compact MedMentor BD bar) */}
-      <div className={activeTab === 'dashboard' ? 'hidden md:block' : 'pb-20 md:pb-0'}>
+      {/* Minimal Global Brand Footer (hidden on mobile Home since Home includes the MedMentor BD bar + Stethoscope footer) */}
+      <div className={isHomeDashboard ? 'hidden md:block' : 'pb-20 md:pb-0'}>
         <MedMentorFooter />
       </div>
 
@@ -325,12 +337,12 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         </div>
       )}
 
-      {/* Fixed 5-Tab Mobile Bottom Navigation Bar — Solid Opaque Surface (zero translucency) */}
+      {/* Fixed 5-Tab Mobile Bottom Navigation Bar — Solid White Surface with Active Emerald Indicator */}
       <nav
         aria-label="Mobile bottom navigation"
-        className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 pb-safe shadow-[0_-4px_16px_rgba(7,21,34,0.12)]"
+        className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white dark:bg-[#0B1C2D] border-t border-slate-200/90 dark:border-slate-800 pb-safe shadow-[0_-4px_18px_rgba(7,21,34,0.09)]"
       >
-        <div className="grid grid-cols-5 h-[62px] items-center px-1">
+        <div className="grid grid-cols-5 h-[62px] items-center px-1.5">
           {MOBILE_BOTTOM_TABS.map((tab) => {
             const Icon = tab.id === 'team' && !teamSession ? Lock : tab.icon;
             const isActive = tab.matchTabs
@@ -349,16 +361,22 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                   }
                 }}
                 aria-current={isActive ? 'page' : undefined}
-                className={`min-h-[48px] flex flex-col items-center justify-center gap-1 rounded-xl transition-colors active:scale-[0.96] ${
+                className={`relative min-h-[48px] flex flex-col items-center justify-center gap-1 rounded-xl transition-colors active:scale-[0.95] ${
                   isActive
-                    ? 'text-[#0E7C7B] dark:text-[#149A99] font-bold'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white font-medium'
+                    ? 'text-[#0E9F7F] dark:text-[#22E3D0] font-bold'
+                    : 'text-[#4B5E73] dark:text-slate-400 hover:text-[#0D2B45] dark:hover:text-white font-medium'
                 }`}
               >
                 <Icon className="w-[21px] h-[21px]" />
                 <span className="text-[11px] leading-none tracking-tight whitespace-nowrap">
                   {tab.label}
                 </span>
+                {isActive && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute -bottom-0.5 w-8 h-[3px] rounded-full bg-gradient-to-r from-[#10B981] to-[#14B8A6]"
+                  />
+                )}
               </button>
             );
           })}

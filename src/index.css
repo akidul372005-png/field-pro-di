@@ -5,6 +5,7 @@
   --font-display: "Plus Jakarta Sans", "Noto Sans Bengali", system-ui, -apple-system, sans-serif;
   --font-sans: "DM Sans", "Noto Sans Bengali", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-script: "Caveat", cursive;
 
   --color-navy-950: #071522;
   --color-navy-900: #0D2B45;
@@ -29,6 +30,10 @@
 
   h1, h2, h3, h4, .font-display {
     font-family: var(--font-display);
+  }
+
+  .font-script {
+    font-family: var(--font-script);
   }
 
   .dark body {

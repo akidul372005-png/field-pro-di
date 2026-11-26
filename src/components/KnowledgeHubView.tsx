@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -21,8 +21,87 @@ import { useApp } from '../context/AppContext';
 import { KnowledgeChapter } from '../types';
 import { StickyBackBar } from './StickyBackBar';
 import { WatchNowButton } from './WatchNowButton';
+import { useDebouncedValue, useWindowedList } from '../hooks/useWindowedList';
 
 type KnowledgeTabKey = 'mpo_desk' | 'medical_knowledge';
+
+const WINDOW_PAGE_SIZE = 30;
+
+interface KnowledgeChapterCardProps {
+  chapter: KnowledgeChapter;
+  chapterBadge: string;
+  isMpoTab: boolean;
+  onOpen: (chapter: KnowledgeChapter) => void;
+}
+
+const KnowledgeChapterCard: React.FC<KnowledgeChapterCardProps> = React.memo(
+  ({ chapter, chapterBadge, isMpoTab, onOpen }) => (
+    <article
+      role="button"
+      tabIndex={0}
+      onClick={() => onOpen(chapter)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen(chapter);
+        }
+      }}
+      className="group text-left rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 hover:border-[#0E7C7B] dark:hover:border-[#149A99] p-4 sm:p-5 flex flex-col justify-between gap-3.5 transition-all hover:shadow-sm active:scale-[0.99] focus-visible:outline-2 focus-visible:outline-[#0E7C7B] cursor-pointer"
+    >
+      <div className="space-y-2.5">
+        {/* Top Meta Row: Chapter_No Badge + Category + Read_Time */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+            <span
+              className={`px-2 py-0.5 rounded-md text-[11px] font-mono font-bold tracking-wide shrink-0 ${
+                isMpoTab ? 'bg-[#0D2B45] dark:bg-[#133859] text-white' : 'bg-[#0E7C7B] text-white'
+              }`}
+            >
+              {chapterBadge}
+            </span>
+            {chapter.Category && (
+              <span className="px-2 py-0.5 rounded-md bg-[#EBF4FA] dark:bg-[#071522] text-[11px] font-semibold text-[#0E7C7B] dark:text-[#7CE0DF] truncate max-w-[170px]">
+                {chapter.Category}
+              </span>
+            )}
+          </div>
+
+          {chapter.Read_Time && (
+            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#0D2B45]/55 dark:text-[#EBF4FA]/60 whitespace-nowrap shrink-0">
+              <Clock className="w-3 h-3" />
+              <span>{chapter.Read_Time}</span>
+            </span>
+          )}
+        </div>
+
+        {/* Chapter Bengali Title */}
+        <h2 className="font-display font-bold text-base sm:text-[17px] text-[#0D2B45] dark:text-white group-hover:text-[#0E7C7B] dark:group-hover:text-[#149A99] leading-snug transition-colors">
+          {chapter.Title_BN || chapterBadge}
+        </h2>
+
+        {/* Bengali Summary */}
+        {chapter.Short_Summary_BN && (
+          <p className="text-xs sm:text-[13px] text-[#0D2B45]/72 dark:text-[#EBF4FA]/75 leading-[1.7] line-clamp-3">
+            {chapter.Short_Summary_BN}
+          </p>
+        )}
+      </div>
+
+      <div className="pt-2.5 border-t border-[#0D2B45]/8 dark:border-[#EBF4FA]/8 flex items-center justify-between gap-2">
+        <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#0E7C7B] dark:text-[#149A99] whitespace-nowrap">
+          <span>বিস্তারিত পড়ুন</span>
+          <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
+        </span>
+        <WatchNowButton
+          videoUrl={chapter.Video_URL}
+          fallbackUrl={chapter.YouTube_URL}
+          size="compact"
+        />
+      </div>
+    </article>
+  )
+);
+KnowledgeChapterCard.displayName = 'KnowledgeChapterCard';
 
 interface ContentBlock {
   type: 'heading' | 'list' | 'paragraph';
@@ -220,37 +299,77 @@ export const KnowledgeHubView: React.FC = () => {
     return found ? found[1] : 0;
   }, [selectedCategory, categoryEntries, activeChapters.length]);
 
-  const filteredChapters = useMemo(() => {
-    const rawQ = searchQuery.trim().toLowerCase();
-    const tokens = rawQ ? rawQ.split(/\s+/).filter(Boolean) : [];
-    const prefix = activeSubTab === 'mpo_desk' ? 'ch' : 'mk';
+  // Debounce full-text Bengali/English search by 150ms for lag-free mobile typing
+  const debouncedSearch = useDebouncedValue(searchQuery, 150);
 
-    return activeChapters.filter((ch, index) => {
-      if (selectedCategory && String(ch.Category ?? '').trim() !== selectedCategory) {
-        return false;
-      }
-      if (tokens.length === 0) return true;
-
-      const fallbackId = `${prefix}-${String(index + 1).padStart(2, '0')}`;
-      const chapterId = String(ch.Chapter_No ?? fallbackId).toLowerCase();
+  // Precompute normalized chapter badges + full-text search haystacks once per tab
+  const indexedChapters = useMemo(() => {
+    const prefix = activeSubTab === 'mpo_desk' ? 'CH' : 'MK';
+    return activeChapters.map((ch, index) => {
+      const fallbackBadge = `${prefix}-${String(index + 1).padStart(2, '0')}`;
+      const chapterBadge = ch.Chapter_No || fallbackBadge;
+      const chapterId = chapterBadge.toLowerCase();
       const compactId = chapterId.replace(/[^a-z0-9]/g, '');
+      const category = String(ch.Category ?? '').trim();
       const haystack = [
         chapterId,
         compactId,
         String(ch.Title_BN ?? '').toLowerCase(),
         String(ch.Short_Summary_BN ?? '').toLowerCase(),
-        String(ch.Category ?? '').toLowerCase(),
+        category.toLowerCase(),
         String(ch.Key_Takeaway_BN ?? '').toLowerCase(),
         String(ch.Full_Content_BN ?? '').toLowerCase(),
       ].join(' ');
+      return {
+        chapter: ch,
+        chapterBadge,
+        compactId,
+        category,
+        haystack,
+      };
+    });
+  }, [activeChapters, activeSubTab]);
 
+  const filteredChapterEntries = useMemo(() => {
+    const rawQ = debouncedSearch.trim().toLowerCase();
+    const tokens = rawQ ? rawQ.split(/\s+/).filter(Boolean) : [];
+
+    return indexedChapters.filter((entry) => {
+      if (selectedCategory && entry.category !== selectedCategory) {
+        return false;
+      }
+      if (tokens.length === 0) return true;
       return tokens.every((tok) => {
-        if (haystack.includes(tok)) return true;
+        if (entry.haystack.includes(tok)) return true;
         const compactTok = tok.replace(/[^a-z0-9]/g, '');
-        return compactTok.length >= 2 && compactId.includes(compactTok);
+        return compactTok.length >= 2 && entry.compactId.includes(compactTok);
       });
     });
-  }, [activeChapters, activeSubTab, searchQuery, selectedCategory]);
+  }, [indexedChapters, debouncedSearch, selectedCategory]);
+
+  const filteredChapters = useMemo(
+    () => filteredChapterEntries.map((entry) => entry.chapter),
+    [filteredChapterEntries]
+  );
+
+  // Render first 30 chapter cards immediately (<100ms), auto-load remaining smoothly on scroll
+  const {
+    visibleItems: visibleChapterEntries,
+    hasMore: hasMoreChapters,
+    remainingCount: remainingChapters,
+    loadMore: loadMoreChapters,
+    showAll: showAllChapters,
+    sentinelRef: chaptersSentinelRef,
+  } = useWindowedList(
+    filteredChapterEntries,
+    `${activeSubTab}|${debouncedSearch}|${selectedCategory}`,
+    WINDOW_PAGE_SIZE
+  );
+
+  const handleOpenChapter = useCallback((chapter: KnowledgeChapter) => {
+    setSelectedChapter(chapter);
+    setCopiedChapter(false);
+  }, []);
 
   const selectedIndex = useMemo(() => {
     if (!selectedChapter) return -1;
@@ -633,89 +752,49 @@ export const KnowledgeHubView: React.FC = () => {
           )}
         </div>
       ) : (
-        <section
-          aria-label={isMpoTab ? 'MPO Desk chapters' : 'Medical Knowledge chapters'}
-          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
-        >
-          {filteredChapters.map((chapter, index) => {
-            const chapterBadge =
-              chapter.Chapter_No ||
-              `${isMpoTab ? 'CH' : 'MK'}-${String(index + 1).padStart(2, '0')}`;
-
-            return (
-              <article
+        <div className="space-y-4">
+          <section
+            aria-label={isMpoTab ? 'MPO Desk chapters' : 'Medical Knowledge chapters'}
+            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
+          >
+            {visibleChapterEntries.map(({ chapter, chapterBadge }, index) => (
+              <KnowledgeChapterCard
                 key={`${chapterBadge}-${chapter.Title_BN}-${index}`}
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  setSelectedChapter(chapter);
-                  setCopiedChapter(false);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    setSelectedChapter(chapter);
-                    setCopiedChapter(false);
-                  }
-                }}
-                className="group text-left rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 hover:border-[#0E7C7B] dark:hover:border-[#149A99] p-4 sm:p-5 flex flex-col justify-between gap-3.5 transition-all hover:shadow-sm active:scale-[0.99] focus-visible:outline-2 focus-visible:outline-[#0E7C7B] cursor-pointer"
-              >
-                <div className="space-y-2.5">
-                  {/* Top Meta Row: Chapter_No Badge + Category + Read_Time */}
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex flex-wrap items-center gap-1.5 min-w-0">
-                      <span
-                        className={`px-2 py-0.5 rounded-md text-[11px] font-mono font-bold tracking-wide shrink-0 ${
-                          isMpoTab
-                            ? 'bg-[#0D2B45] dark:bg-[#133859] text-white'
-                            : 'bg-[#0E7C7B] text-white'
-                        }`}
-                      >
-                        {chapterBadge}
-                      </span>
-                      {chapter.Category && (
-                        <span className="px-2 py-0.5 rounded-md bg-[#EBF4FA] dark:bg-[#071522] text-[11px] font-semibold text-[#0E7C7B] dark:text-[#7CE0DF] truncate max-w-[170px]">
-                          {chapter.Category}
-                        </span>
-                      )}
-                    </div>
+                chapter={chapter}
+                chapterBadge={chapterBadge}
+                isMpoTab={isMpoTab}
+                onOpen={handleOpenChapter}
+              />
+            ))}
+          </section>
 
-                    {chapter.Read_Time && (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-[#0D2B45]/55 dark:text-[#EBF4FA]/60 whitespace-nowrap shrink-0">
-                        <Clock className="w-3 h-3" />
-                        <span>{chapter.Read_Time}</span>
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Chapter Bengali Title */}
-                  <h2 className="font-display font-bold text-base sm:text-[17px] text-[#0D2B45] dark:text-white group-hover:text-[#0E7C7B] dark:group-hover:text-[#149A99] leading-snug transition-colors">
-                    {chapter.Title_BN || chapterBadge}
-                  </h2>
-
-                  {/* Bengali Summary */}
-                  {chapter.Short_Summary_BN && (
-                    <p className="text-xs sm:text-[13px] text-[#0D2B45]/72 dark:text-[#EBF4FA]/75 leading-[1.7] line-clamp-3">
-                      {chapter.Short_Summary_BN}
-                    </p>
-                  )}
-                </div>
-
-                <div className="pt-2.5 border-t border-[#0D2B45]/8 dark:border-[#EBF4FA]/8 flex items-center justify-between gap-2">
-                  <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#0E7C7B] dark:text-[#149A99] whitespace-nowrap">
-                    <span>বিস্তারিত পড়ুন</span>
-                    <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
-                  </span>
-                  <WatchNowButton
-                    videoUrl={chapter.Video_URL}
-                    fallbackUrl={chapter.YouTube_URL}
-                    size="compact"
-                  />
-                </div>
-              </article>
-            );
-          })}
-        </section>
+          {hasMoreChapters && (
+            <div
+              ref={chaptersSentinelRef}
+              className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 px-4 py-3 flex flex-wrap items-center justify-between gap-2.5"
+            >
+              <span className="text-xs text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 tabular-nums">
+                Showing {visibleChapterEntries.length} of {filteredChapters.length} chapters
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={loadMoreChapters}
+                  className="min-h-[40px] sm:min-h-[36px] px-3.5 py-1.5 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 hover:border-[#0E7C7B] text-xs font-semibold text-[#0D2B45] dark:text-white transition-colors cursor-pointer"
+                >
+                  Load {Math.min(WINDOW_PAGE_SIZE, remainingChapters)} More
+                </button>
+                <button
+                  type="button"
+                  onClick={showAllChapters}
+                  className="min-h-[40px] sm:min-h-[36px] px-3.5 py-1.5 rounded-xl bg-[#EBF4FA] dark:bg-[#133859] hover:bg-[#dcecf7] dark:hover:bg-[#1C4A73] text-xs font-semibold text-[#0D2B45] dark:text-white transition-colors cursor-pointer"
+                >
+                  Show All ({filteredChapters.length})
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       {/* Full-Screen Mobile / Slide-Over Desktop Bengali Reader */}

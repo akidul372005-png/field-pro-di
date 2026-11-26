@@ -11,7 +11,10 @@ import {
 import { useApp } from '../context/AppContext';
 import { getEffectiveIndications, isActiveRecord } from '../services/api';
 
-export const GlobalSearchBar: React.FC<{ compact?: boolean }> = ({ compact = false }) => {
+export const GlobalSearchBar: React.FC<{
+  compact?: boolean;
+  variant?: 'default' | 'pill';
+}> = ({ compact = false, variant = 'default' }) => {
   const {
     dataset,
     teamSession,
@@ -116,8 +119,12 @@ export const GlobalSearchBar: React.FC<{ compact?: boolean }> = ({ compact = fal
       <div className="relative flex items-center">
         <Search
           className={`${
-            compact ? 'w-4 h-4 left-3' : 'w-4 h-4 sm:w-5 sm:h-5 left-3.5 sm:left-4'
-          } text-[#0D2B45]/45 dark:text-[#EBF4FA]/45 absolute pointer-events-none`}
+            variant === 'pill'
+              ? 'w-[18px] h-[18px] left-4 text-[#0D2B45]/75 dark:text-[#7CE0DF]'
+              : compact
+              ? 'w-4 h-4 left-3 text-[#0D2B45]/45 dark:text-[#EBF4FA]/45'
+              : 'w-4 h-4 sm:w-5 sm:h-5 left-3.5 sm:left-4 text-[#0D2B45]/45 dark:text-[#EBF4FA]/45'
+          } absolute pointer-events-none`}
           aria-hidden="true"
         />
         <input
@@ -131,13 +138,17 @@ export const GlobalSearchBar: React.FC<{ compact?: boolean }> = ({ compact = fal
             if (query.trim().length > 0) setOpen(true);
           }}
           placeholder={
-            teamSession
+            variant === 'pill'
+              ? 'Search products, generics, indications'
+              : teamSession
               ? 'Search products, generics, indications, chapters, doctors...'
               : 'Search products, generics, indications, or chapters...'
           }
           aria-label="Global search"
           className={
-            compact
+            variant === 'pill'
+              ? 'w-full min-h-[44px] sm:min-h-[48px] py-2 pl-11 pr-10 rounded-full bg-white dark:bg-[#0D2235] border border-white/90 dark:border-[#EBF4FA]/15 shadow-[0_6px_22px_rgba(6,29,62,0.12)] dark:shadow-black/40 text-sm sm:text-[15px] text-[#0D2B45] dark:text-[#EBF4FA] placeholder:text-[#5A6D82] dark:placeholder:text-[#94AFC7] focus:outline-none focus:ring-2 focus:ring-[#149A99]/40 transition-all'
+              : compact
               ? 'w-full py-2 min-h-[40px] sm:min-h-[44px] pl-9 pr-9 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/15 shadow-sm text-sm text-[#0D2B45] dark:text-[#EBF4FA] placeholder:text-[#0D2B45]/45 dark:placeholder:text-[#EBF4FA]/45 focus:outline-none focus:border-[#0E7C7B] focus:ring-2 focus:ring-[#0E7C7B]/20 transition-colors'
               : 'w-full min-h-[48px] sm:min-h-[52px] pl-10 sm:pl-12 pr-11 rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/15 shadow-sm text-base md:text-[15px] text-[#0D2B45] dark:text-[#EBF4FA] placeholder:text-[#0D2B45]/45 dark:placeholder:text-[#EBF4FA]/45 focus:outline-none focus:border-[#0E7C7B] focus:ring-2 focus:ring-[#0E7C7B]/20 transition-colors'
           }
@@ -150,9 +161,9 @@ export const GlobalSearchBar: React.FC<{ compact?: boolean }> = ({ compact = fal
               setOpen(false);
             }}
             aria-label="Clear search"
-            className={`absolute right-1 ${
-              compact ? 'min-h-[34px] min-w-[34px]' : 'min-h-[40px] min-w-[40px]'
-            } flex items-center justify-center rounded-lg text-[#0D2B45]/50 hover:text-[#0D2B45] dark:text-[#EBF4FA]/50 dark:hover:text-white`}
+            className={`absolute right-2 ${
+              compact || variant === 'pill' ? 'min-h-[34px] min-w-[34px]' : 'min-h-[40px] min-w-[40px]'
+            } flex items-center justify-center rounded-full text-[#0D2B45]/50 hover:text-[#0D2B45] dark:text-[#EBF4FA]/50 dark:hover:text-white`}
           >
             <X className="w-4 h-4" />
           </button>

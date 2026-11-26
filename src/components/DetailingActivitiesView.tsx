@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
   BookOpen,
@@ -24,9 +24,102 @@ import {
   matchSpecialistName,
   normalizeGenericKey,
 } from '../services/api';
+import { useDebouncedValue, useWindowedList } from '../hooks/useWindowedList';
 
 type SubTab = 'detailing' | 'catalog';
 type LanguageView = 'both' | 'bn' | 'en';
+
+const WINDOW_PAGE_SIZE = 30;
+
+interface GenericGroupRowProps {
+  group: GenericGroup;
+  onSelect: (group: GenericGroup) => void;
+}
+
+const GenericGroupRow: React.FC<GenericGroupRowProps> = React.memo(({ group, onSelect }) => {
+  const scriptCount = group.scripts.length;
+  const brandHeading = group.brandNames.join(', ');
+
+  return (
+    <div className="px-4 sm:px-5 py-4 hover:bg-[#F4F8FC]/80 dark:hover:bg-[#133859]/25 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3.5">
+      <div className="min-w-0 flex-1 space-y-1.5">
+        {/* Primary Generic Title + Saved Script Badge */}
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+          <h3 className="font-display font-bold text-base sm:text-lg text-[#0D2B45] dark:text-white">
+            {group.genericName}
+          </h3>
+          <span
+            className={`inline-flex items-center px-2.5 py-0.5 rounded-lg text-[11px] font-mono tabular-nums font-semibold ${
+              scriptCount > 0
+                ? 'bg-[#0E7C7B]/12 dark:bg-[#149A99]/20 text-[#0E7C7B] dark:text-[#149A99]'
+                : 'bg-[#0D2B45]/6 dark:bg-[#EBF4FA]/10 text-[#0D2B45]/55 dark:text-[#EBF4FA]/55'
+            }`}
+          >
+            {scriptCount} {scriptCount === 1 ? 'script' : 'scripts'}
+          </span>
+          {group.therapeuticClasses.length > 0 && (
+            <span className="text-xs text-[#0D2B45]/55 dark:text-[#EBF4FA]/55">
+              · {group.therapeuticClasses.join(', ')}
+            </span>
+          )}
+        </div>
+
+        {/* Associated Drug International Brand Name(s) */}
+        {brandHeading && (
+          <div className="text-xs sm:text-sm font-semibold text-[#0E7C7B] dark:text-[#149A99]">
+            {brandHeading}
+          </div>
+        )}
+
+        {/* Compact Strength & Dosage Form Subtext/Tags */}
+        {group.products.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+            {group.products.map((prod, idx) => {
+              const bName = prod.Brand_Name || prod.Product_Name || prod.Product_ID;
+              const strengthForm = [prod.Strength, prod.Dosage_Form].filter(Boolean).join(' ');
+              const label =
+                strengthForm && !bName.toLowerCase().includes(strengthForm.toLowerCase())
+                  ? `${bName} (${strengthForm})`
+                  : bName;
+              return (
+                <span
+                  key={`${prod.Product_ID}-${idx}`}
+                  className="text-[11px] px-2 py-0.5 rounded-md bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 text-[#0D2B45]/80 dark:text-[#EBF4FA]/80"
+                >
+                  {label}
+                </span>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Preview of Saved Specialists if any */}
+        {scriptCount > 0 && (
+          <div className="text-[11px] text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 pt-0.5">
+            Specialists:{' '}
+            <span className="font-medium text-[#0D2B45]/85 dark:text-[#EBF4FA]/85">
+              {group.scripts.map((s) => s.Specialist || 'General').join(' · ')}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Right-side "Detailing" Action Button */}
+      <div className="flex items-center justify-end shrink-0">
+        <button
+          type="button"
+          onClick={() => onSelect(group)}
+          className="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-xl bg-[#0D2B45] hover:bg-[#133859] dark:bg-[#0E7C7B] dark:hover:bg-[#149A99] text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors active:scale-[0.98] cursor-pointer"
+        >
+          <BookOpen className="w-4 h-4" />
+          <span>Detailing</span>
+          <ChevronRight className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+});
+GenericGroupRow.displayName = 'GenericGroupRow';
 
 export const DetailingActivitiesView: React.FC = () => {
   const {
@@ -140,38 +233,58 @@ export const DetailingActivitiesView: React.FC = () => {
     }
   }, [selectedGroup, selectedScriptId]);
 
-  // Filtered Generic Groups for Step 1 (searches BOTH Brand Name and Generic Name + strengths/class)
-  const filteredGenericGroups = useMemo(() => {
-    const q = genericSearch.trim().toLowerCase();
-    return genericGroups.filter((group) => {
-      if (onlyWithScripts && group.scripts.length === 0) return false;
-      if (!q) return true;
+  // Debounce search by 150ms so typing stays instant across 500+ generic groups
+  const debouncedGenericSearch = useDebouncedValue(genericSearch, 150);
 
-      if (group.genericName.toLowerCase().includes(q)) return true;
-      if (group.brandNames.some((b) => b.toLowerCase().includes(q))) return true;
-      if (group.therapeuticClasses.some((c) => c.toLowerCase().includes(q))) return true;
-      if (
-        group.products.some(
-          (p) =>
-            String(p.Brand_Name ?? '').toLowerCase().includes(q) ||
-            String(p.Product_Name ?? '').toLowerCase().includes(q) ||
-            String(p.Strength ?? '').toLowerCase().includes(q) ||
-            String(p.Dosage_Form ?? '').toLowerCase().includes(q) ||
-            String(p.Product_ID ?? '').toLowerCase().includes(q)
-        )
-      ) {
-        return true;
-      }
-      if (
-        group.scripts.some((s) =>
-          String(s.Specialist ?? '').toLowerCase().includes(q)
-        )
-      ) {
-        return true;
-      }
-      return false;
-    });
-  }, [genericGroups, genericSearch, onlyWithScripts]);
+  // Precompute lowercased search haystacks once per dataset update
+  const indexedGenericGroups = useMemo(
+    () =>
+      genericGroups.map((group) => ({
+        group,
+        haystack: [
+          group.genericName,
+          ...group.brandNames,
+          ...group.therapeuticClasses,
+          ...group.products.flatMap((p) => [
+            p.Brand_Name,
+            p.Product_Name,
+            p.Strength,
+            p.Dosage_Form,
+            p.Product_ID,
+          ]),
+          ...group.scripts.map((s) => s.Specialist),
+        ]
+          .map((v) => String(v ?? '').toLowerCase())
+          .join(' '),
+      })),
+    [genericGroups]
+  );
+
+  // Filtered Generic Groups for Step 1 (searches ALL groups across Brand, Generic, Strength, Class & Specialist)
+  const filteredGenericGroups = useMemo(() => {
+    const q = debouncedGenericSearch.trim().toLowerCase();
+    return indexedGenericGroups
+      .filter(({ group, haystack }) => {
+        if (onlyWithScripts && group.scripts.length === 0) return false;
+        if (!q) return true;
+        return haystack.includes(q);
+      })
+      .map(({ group }) => group);
+  }, [indexedGenericGroups, debouncedGenericSearch, onlyWithScripts]);
+
+  // Render first 30 generics immediately (<100ms), auto-load 30 more smoothly on scroll
+  const {
+    visibleItems: visibleGenericGroups,
+    hasMore: hasMoreGenerics,
+    remainingCount: remainingGenerics,
+    loadMore: loadMoreGenerics,
+    showAll: showAllGenerics,
+    sentinelRef: genericsSentinelRef,
+  } = useWindowedList(
+    filteredGenericGroups,
+    `${debouncedGenericSearch}|${onlyWithScripts}`,
+    WINDOW_PAGE_SIZE
+  );
 
   const genericsWithScriptsCount = useMemo(
     () => genericGroups.filter((g) => g.scripts.length > 0).length,
@@ -179,10 +292,10 @@ export const DetailingActivitiesView: React.FC = () => {
   );
 
   // Handlers for Generic-wise Detailing
-  const handleSelectGeneric = (group: GenericGroup) => {
+  const handleSelectGeneric = useCallback((group: GenericGroup) => {
     setSelectedGenericKey(group.key);
     setSelectedScriptId(null);
-  };
+  }, []);
 
   const handleBackToGenerics = () => {
     setSelectedGenericKey(null);
@@ -399,98 +512,44 @@ export const DetailingActivitiesView: React.FC = () => {
                   </p>
                 </div>
               ) : (
-                <div className="divide-y divide-[#0D2B45]/8 dark:divide-[#EBF4FA]/8">
-                  {filteredGenericGroups.map((group) => {
-                    const scriptCount = group.scripts.length;
-                    const brandHeading = group.brandNames.join(', ');
-                    return (
-                      <div
+                <>
+                  <div className="divide-y divide-[#0D2B45]/8 dark:divide-[#EBF4FA]/8">
+                    {visibleGenericGroups.map((group) => (
+                      <GenericGroupRow
                         key={group.key}
-                        className="px-4 sm:px-5 py-4 hover:bg-[#F4F8FC]/80 dark:hover:bg-[#133859]/25 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3.5"
-                      >
-                        <div className="min-w-0 flex-1 space-y-1.5">
-                          {/* Primary Generic Title + Saved Script Badge */}
-                          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-                            <h3 className="font-display font-bold text-base sm:text-lg text-[#0D2B45] dark:text-white">
-                              {group.genericName}
-                            </h3>
-                            <span
-                              className={`inline-flex items-center px-2.5 py-0.5 rounded-lg text-[11px] font-mono tabular-nums font-semibold ${
-                                scriptCount > 0
-                                  ? 'bg-[#0E7C7B]/12 dark:bg-[#149A99]/20 text-[#0E7C7B] dark:text-[#149A99]'
-                                  : 'bg-[#0D2B45]/6 dark:bg-[#EBF4FA]/10 text-[#0D2B45]/55 dark:text-[#EBF4FA]/55'
-                              }`}
-                            >
-                              {scriptCount} {scriptCount === 1 ? 'script' : 'scripts'}
-                            </span>
-                            {group.therapeuticClasses.length > 0 && (
-                              <span className="text-xs text-[#0D2B45]/55 dark:text-[#EBF4FA]/55">
-                                · {group.therapeuticClasses.join(', ')}
-                              </span>
-                            )}
-                          </div>
+                        group={group}
+                        onSelect={handleSelectGeneric}
+                      />
+                    ))}
+                  </div>
 
-                          {/* Associated Drug International Brand Name(s) */}
-                          {brandHeading && (
-                            <div className="text-xs sm:text-sm font-semibold text-[#0E7C7B] dark:text-[#149A99]">
-                              {brandHeading}
-                            </div>
-                          )}
-
-                          {/* Compact Strength & Dosage Form Subtext/Tags */}
-                          {group.products.length > 0 && (
-                            <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                              {group.products.map((prod, idx) => {
-                                const bName = prod.Brand_Name || prod.Product_Name || prod.Product_ID;
-                                const strengthForm = [prod.Strength, prod.Dosage_Form]
-                                  .filter(Boolean)
-                                  .join(' ');
-                                const label =
-                                  strengthForm &&
-                                  !bName.toLowerCase().includes(strengthForm.toLowerCase())
-                                    ? `${bName} (${strengthForm})`
-                                    : bName;
-                                return (
-                                  <span
-                                    key={`${prod.Product_ID}-${idx}`}
-                                    className="text-[11px] px-2 py-0.5 rounded-md bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 text-[#0D2B45]/80 dark:text-[#EBF4FA]/80"
-                                  >
-                                    {label}
-                                  </span>
-                                );
-                              })}
-                            </div>
-                          )}
-
-                          {/* Preview of Saved Specialists if any */}
-                          {scriptCount > 0 && (
-                            <div className="text-[11px] text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 pt-0.5">
-                              Specialists:{' '}
-                              <span className="font-medium text-[#0D2B45]/85 dark:text-[#EBF4FA]/85">
-                                {group.scripts
-                                  .map((s) => s.Specialist || 'General')
-                                  .join(' · ')}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Right-side "Detailing" Action Button */}
-                        <div className="flex items-center justify-end shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => handleSelectGeneric(group)}
-                            className="w-full sm:w-auto min-h-[44px] px-4 py-2 rounded-xl bg-[#0D2B45] hover:bg-[#133859] dark:bg-[#0E7C7B] dark:hover:bg-[#149A99] text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors active:scale-[0.98]"
-                          >
-                            <BookOpen className="w-4 h-4" />
-                            <span>Detailing</span>
-                            <ChevronRight className="w-4 h-4" />
-                          </button>
-                        </div>
+                  {hasMoreGenerics && (
+                    <div
+                      ref={genericsSentinelRef}
+                      className="px-4 sm:px-5 py-3 bg-[#F4F8FC]/70 dark:bg-[#0A1C2D] border-t border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 flex flex-wrap items-center justify-between gap-2.5"
+                    >
+                      <span className="text-xs text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 tabular-nums">
+                        Showing {visibleGenericGroups.length} of {filteredGenericGroups.length} matching generics
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={loadMoreGenerics}
+                          className="min-h-[40px] sm:min-h-[36px] px-3.5 py-1.5 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 hover:border-[#0E7C7B] text-xs font-semibold text-[#0D2B45] dark:text-white transition-colors cursor-pointer"
+                        >
+                          Load {Math.min(WINDOW_PAGE_SIZE, remainingGenerics)} More
+                        </button>
+                        <button
+                          type="button"
+                          onClick={showAllGenerics}
+                          className="min-h-[40px] sm:min-h-[36px] px-3.5 py-1.5 rounded-xl bg-[#EBF4FA] dark:bg-[#133859] hover:bg-[#dcecf7] dark:hover:bg-[#1C4A73] text-xs font-semibold text-[#0D2B45] dark:text-white transition-colors cursor-pointer"
+                        >
+                          Show All ({filteredGenericGroups.length})
+                        </button>
                       </div>
-                    );
-                  })}
-                </div>
+                    </div>
+                  )}
+                </>
               )}
             </section>
           ) : (
