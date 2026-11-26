@@ -121,7 +121,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                   type="button"
                   onClick={() => {
                     setActiveTab(item.id);
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                    window.scrollTo({ top: 0, behavior: 'auto' });
                   }}
                   className={`py-1.5 whitespace-nowrap shrink-0 transition-colors border-b-2 cursor-pointer ${
                     isActive
@@ -145,7 +145,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                 type="button"
                 onClick={() => {
                   setActiveTab('settings');
-                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                  window.scrollTo({ top: 0, behavior: 'auto' });
                 }}
                 title="Super Admin Mode active — click to manage or log out"
                 className="min-h-[36px] md:min-h-[38px] px-2.5 rounded-xl bg-amber-500/20 border border-amber-400/50 text-amber-200 hover:bg-amber-500/30 text-[11px] font-semibold inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
@@ -357,7 +357,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                     navigateHome();
                   } else {
                     setActiveTab(tab.id);
-                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                    window.scrollTo({ top: 0, behavior: 'auto' });
                   }
                 }}
                 aria-current={isActive ? 'page' : undefined}

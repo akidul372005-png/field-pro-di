@@ -19,14 +19,14 @@ export function useDebouncedValue<T>(value: T, delayMs = 150): T {
 
 /**
  * Progressive windowed list renderer:
- * - Renders only the first `pageSize` (default 30) filtered items immediately (<100ms paint)
+ * - Renders only the first `pageSize` (default 20) filtered items immediately (<100ms paint)
  * - Auto-appends the next `pageSize` items smoothly via IntersectionObserver
  * - Exposes `loadMore` and `showAll` fallbacks when IntersectionObserver is unavailable
  */
 export function useWindowedList<T>(
   items: readonly T[],
   resetKey: string,
-  pageSize = 30
+  pageSize = 20
 ) {
   const [visibleCount, setVisibleCount] = useState<number>(pageSize);
   const sentinelRef = useRef<HTMLDivElement | null>(null);

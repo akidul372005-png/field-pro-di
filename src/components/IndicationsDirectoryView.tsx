@@ -51,7 +51,7 @@ interface IndicationsDirectoryViewProps {
 type DirectorySection = 'indications' | 'specialists';
 type IndicationDrawerTab = 'guide' | 'specialists' | 'generics';
 
-const WINDOW_PAGE_SIZE = 30;
+const WINDOW_PAGE_SIZE = 20;
 
 interface IndicationCardProps {
   indication: Indication;
@@ -927,7 +927,7 @@ export const IndicationsDirectoryView: React.FC<IndicationsDirectoryViewProps> =
           role="dialog"
           aria-modal="true"
           aria-labelledby="indication-drawer-title"
-          className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-[2px]"
+          className="fixed inset-0 z-50 flex justify-end bg-black/60"
           onClick={() => setSelectedIndicationId(null)}
         >
           <div
@@ -1633,7 +1633,7 @@ export const IndicationsDirectoryView: React.FC<IndicationsDirectoryViewProps> =
           role="dialog"
           aria-modal="true"
           aria-labelledby="specialist-drawer-title"
-          className="fixed inset-0 z-50 flex justify-end bg-black/50 backdrop-blur-[2px]"
+          className="fixed inset-0 z-50 flex justify-end bg-black/60"
           onClick={() => setSelectedSpecialistId(null)}
         >
           <div

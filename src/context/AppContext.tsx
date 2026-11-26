@@ -1,5 +1,6 @@
 import React, {
   createContext,
+  startTransition,
   useCallback,
   useContext,
   useEffect,
@@ -26,6 +27,7 @@ import {
   ToastNotification,
 } from '../types';
 import { auth, testFirestoreConnection } from '../lib/firebase';
+import { loadDatasetFromIndexedDB, saveDatasetToIndexedDB } from '../lib/cacheDb';
 import {
   TeamRegistrationInput,
   clearCachedFirebaseProfile,
@@ -54,16 +56,19 @@ import {
 import {
   DEFAULT_API_URL,
   DEFAULT_APPS_SCRIPT_URL,
+  GenericGroup,
   SHEET_PRIMARY_KEY,
   SuperAdminConfigSource,
   applyMutationLocally,
   authenticateAreaTeam,
   authenticateMpoUser,
+  buildGenericGroups,
   changeSuperAdminPasscodeOnServer,
   clearLegacyPendingGroupUpdates,
   clearTeamSession,
   fetchAllDataFromAppsScript,
   fetchSuperAdminStatus,
+  getInitialStarterDataset,
   getLastSyncTime,
   getSavedActiveMpoId,
   getSavedApiUrl,
@@ -72,16 +77,15 @@ import {
   getSavedTeamSession,
   getSavedTheme,
   isConfiguredApiUrl,
-  loadCachedDataset,
   loadSyncQueue,
   loginSuperAdminOnServer,
   logoutSuperAdminOnServer,
   matchSpecialistName,
+  normalizeCachedDataset,
   postMutationToAppsScript,
   resetCachedDatasetToStarter,
   saveActiveMpoId,
   saveApiUrl,
-  saveCachedDataset,
   saveLastSyncTime,
   saveSyncQueue,
   saveTeamPin,
@@ -89,6 +93,8 @@ import {
   saveTheme,
   setupSuperAdminPasscodeOnServer,
 } from '../services/api';
+
+export type TeamWorkspaceSubTab = 'doctors' | 'chambers' | 'hospitals' | 'team';
 
 const MASTER_DATA_SHEETS = new Set<string>([
   'Products',
@@ -123,6 +129,9 @@ interface AppContextValue {
   activeTab: NavTab;
   setActiveTab: (tab: NavTab) => void;
   navigateHome: () => void;
+  teamSubTab: TeamWorkspaceSubTab;
+  setTeamSubTab: (subTab: TeamWorkspaceSubTab) => void;
+  openTeamSection: (subTab: TeamWorkspaceSubTab) => void;
 
   // Team / Area Session (Firebase Auth + Cloud Firestore private workspace — works online & offline)
   teamSession: TeamSession | null;
@@ -250,21 +259,34 @@ interface AppContextValue {
   clearSyncQueue: () => void;
   resetLocalStarterData: () => void;
 
-  // Lookup maps
+  // Lookup maps & precomputed generic groups
   areaMap: Map<string, Area>;
   hospitalMap: Map<string, Hospital>;
   doctorMap: Map<string, Doctor>;
   departmentMap: Map<string, Department>;
   productMap: Map<string, Product>;
   mpoMap: Map<string, MPOUser>;
+  genericGroups: GenericGroup[];
+  genericScriptCountMap: Map<string, number>;
+}
+
+interface NavigationContextValue {
+  activeTab: NavTab;
+  setActiveTab: (tab: NavTab) => void;
+  navigateHome: () => void;
+  teamSubTab: TeamWorkspaceSubTab;
+  setTeamSubTab: (subTab: TeamWorkspaceSubTab) => void;
+  openTeamSection: (subTab: TeamWorkspaceSubTab) => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
+const NavigationContext = createContext<NavigationContextValue | null>(null);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // Boot instantly with lightweight starter shell; full cached dataset hydrates async from IndexedDB
   const [sheetDataset, setDataset] = useState<FieldDataset>(() => {
     clearLegacyPendingGroupUpdates();
-    return loadCachedDataset();
+    return getInitialStarterDataset();
   });
   const [apiUrl, setApiUrl] = useState<string>(() => getSavedApiUrl());
   const [isOnline, setIsOnline] = useState<boolean>(() =>
@@ -274,8 +296,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(() => getLastSyncTime());
   const [syncQueue, setSyncQueue] = useState<QueuedMutation[]>(() => loadSyncQueue());
-  const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
+  const [activeTab, setActiveTabState] = useState<NavTab>('dashboard');
+  const [teamSubTab, setTeamSubTabState] = useState<TeamWorkspaceSubTab>('doctors');
   const [firebaseAuthReady, setFirebaseAuthReady] = useState(false);
+
+  // Wrap tab switching in React.startTransition so every mobile tap responds in <100ms
+  const setActiveTab = useCallback((tab: NavTab) => {
+    startTransition(() => {
+      setActiveTabState(tab);
+    });
+  }, []);
+
+  const setTeamSubTab = useCallback((subTab: TeamWorkspaceSubTab) => {
+    startTransition(() => {
+      setTeamSubTabState(subTab);
+    });
+  }, []);
+
+  const openTeamSection = useCallback((subTab: TeamWorkspaceSubTab) => {
+    startTransition(() => {
+      setTeamSubTabState(subTab);
+      setActiveTabState('team');
+    });
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'auto' });
+    }
+  }, []);
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [firebaseProfile, setFirebaseProfile] = useState<FirebaseUserProfile | null>(() =>
     getCachedFirebaseProfile()
@@ -344,18 +390,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     datasetSaveTimerRef.current = window.setTimeout(() => {
       if (pendingDatasetSaveRef.current) {
-        saveCachedDataset(pendingDatasetSaveRef.current);
+        const snapshot = pendingDatasetSaveRef.current;
         pendingDatasetSaveRef.current = null;
+        void saveDatasetToIndexedDB(snapshot);
       }
       datasetSaveTimerRef.current = null;
-    }, 350);
+    }, 300);
+  }, []);
+
+  // Hydrate full cached dataset asynchronously from IndexedDB (never blocks initial paint or taps)
+  const hasServerRefreshedRef = useRef(false);
+  useEffect(() => {
+    let active = true;
+    void loadDatasetFromIndexedDB().then((cached) => {
+      if (!active || !cached || hasServerRefreshedRef.current) return;
+      const normalized = normalizeCachedDataset(cached);
+      startTransition(() => {
+        setDataset(normalized);
+      });
+      // Ensure any migrated legacy snapshot is persisted cleanly to IndexedDB
+      void saveDatasetToIndexedDB(normalized);
+    });
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
     const flushPendingDataset = () => {
       if (pendingDatasetSaveRef.current) {
-        saveCachedDataset(pendingDatasetSaveRef.current);
+        const snapshot = pendingDatasetSaveRef.current;
         pendingDatasetSaveRef.current = null;
+        void saveDatasetToIndexedDB(snapshot);
       }
     };
     window.addEventListener('beforeunload', flushPendingDataset);
@@ -892,13 +958,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [superAdminToken, pushToast]);
 
   const navigateHome = useCallback(() => {
-    setSelectedDoctorId(null);
-    setSelectedProductId(null);
-    setSelectedSpecialistId(null);
-    setRecordModal(null);
-    setActiveTab('dashboard');
+    startTransition(() => {
+      setSelectedDoctorId(null);
+      setSelectedProductId(null);
+      setSelectedSpecialistId(null);
+      setRecordModal(null);
+      setActiveTabState('dashboard');
+    });
     if (typeof window !== 'undefined') {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      window.scrollTo({ top: 0, behavior: 'auto' });
     }
   }, []);
 
@@ -1020,8 +1088,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setIsLoadingData(true);
       try {
         const fetched = await fetchAllDataFromAppsScript(targetUrl);
-        setDataset(fetched);
-        saveCachedDataset(fetched);
+        hasServerRefreshedRef.current = true;
+        startTransition(() => {
+          setDataset(fetched);
+        });
+        void saveDatasetToIndexedDB(fetched);
         const nowIso = new Date().toISOString();
         setLastSyncedAt(nowIso);
         saveLastSyncTime(nowIso);
@@ -1442,7 +1513,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       setDataset((prev) => {
         const updated = applyMutationLocally(prev, action, sheet, data);
-        saveCachedDataset(updated);
+        void saveDatasetToIndexedDB(updated);
         return updated;
       });
 
@@ -1539,6 +1610,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const resetLocalStarterData = useCallback(() => {
     const fresh = resetCachedDatasetToStarter();
     setDataset(fresh);
+    void saveDatasetToIndexedDB(fresh);
     syncQueueRef.current = [];
     setSyncQueue([]);
     saveSyncQueue([]);
@@ -1576,6 +1648,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [dataset.MPO_Users]
   );
 
+  // Precompute genericGroups + script count map ONCE per dataset update (0ms on Products/Detailing tab tap)
+  const genericGroups = useMemo(
+    () => buildGenericGroups(dataset.Products, dataset.Doctor_Product_Detailing),
+    [dataset.Products, dataset.Doctor_Product_Detailing]
+  );
+
+  const genericScriptCountMap = useMemo(() => {
+    const map = new Map<string, number>();
+    genericGroups.forEach((g) => {
+      map.set(g.key, g.scripts.length);
+    });
+    return map;
+  }, [genericGroups]);
+
   const activeMpo = useMemo(
     () =>
       (teamSession?.mpoId ? mpoMap.get(teamSession.mpoId) : undefined) ||
@@ -1584,10 +1670,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [teamSession?.mpoId, mpoMap, activeMpoId, dataset.MPO_Users]
   );
 
-  // Navigation shortcuts
+  // Navigation shortcuts (wrapped in startTransition for instant tap response)
   const openDoctorProfile = useCallback((doctorId: string) => {
-    setSelectedDoctorId(doctorId);
-    setActiveTab('team');
+    startTransition(() => {
+      setSelectedDoctorId(doctorId);
+      setTeamSubTabState('doctors');
+      setActiveTabState('team');
+    });
   }, []);
 
   const openSpecialistDetail = useCallback(
@@ -1600,12 +1689,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           d.Department_Name.toLowerCase() === target.toLowerCase() ||
           matchSpecialistName(d.Department_Name, target)
       );
-      if (matched) {
-        setSelectedSpecialistId(matched.Department_ID);
-      } else {
-        setSelectedSpecialistId(target);
-      }
-      setActiveTab('specialists');
+      startTransition(() => {
+        setSelectedSpecialistId(matched ? matched.Department_ID : target);
+        setActiveTabState('specialists');
+      });
     },
     [dataset.Departments]
   );
@@ -1622,24 +1709,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       specialist?: string;
       subTab?: 'catalog' | 'detailing';
     }) => {
-      setPrefillDetailing(opts);
-      setActiveTab('detailing');
+      startTransition(() => {
+        setPrefillDetailing(opts);
+        setActiveTabState('detailing');
+      });
     },
     []
   );
 
-  const value: AppContextValue = {
-    dataset,
-    apiUrl,
-    isApiConfigured,
-    isOnline,
-    isSyncing,
-    isLoadingData,
-    lastSyncedAt,
-    syncQueue,
-    activeTab,
-    setActiveTab,
-    navigateHome,
+  const navValue = useMemo<NavigationContextValue>(
+    () => ({
+      activeTab,
+      setActiveTab,
+      navigateHome,
+      teamSubTab,
+      setTeamSubTab,
+      openTeamSection,
+    }),
+    [activeTab, setActiveTab, navigateHome, teamSubTab, setTeamSubTab, openTeamSection]
+  );
+
+  const value = useMemo<AppContextValue>(
+    () => ({
+      dataset,
+      apiUrl,
+      isApiConfigured,
+      isOnline,
+      isSyncing,
+      isLoadingData,
+      lastSyncedAt,
+      syncQueue,
+      activeTab,
+      setActiveTab,
+      navigateHome,
+      teamSubTab,
+      setTeamSubTab,
+      openTeamSection,
     teamSession,
     firebaseAuthReady,
     firebaseUserEmail: firebaseUser?.email ?? null,
@@ -1712,13 +1817,113 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     areaMap,
     hospitalMap,
     doctorMap,
-    departmentMap,
-    productMap,
-    mpoMap,
-  };
+      departmentMap,
+      productMap,
+      mpoMap,
+      genericGroups,
+      genericScriptCountMap,
+    }),
+    [
+      dataset,
+      apiUrl,
+      isApiConfigured,
+      isOnline,
+      isSyncing,
+      isLoadingData,
+      lastSyncedAt,
+      syncQueue,
+      activeTab,
+      setActiveTab,
+      navigateHome,
+      teamSubTab,
+      setTeamSubTab,
+      openTeamSection,
+      teamSession,
+      firebaseAuthReady,
+      firebaseUser,
+      needsFirebaseAreaSetup,
+      firebaseSyncError,
+      areaNotes,
+      teamPinConfigured,
+      loginTeamWithGoogle,
+      loginTeamWithFirebase,
+      registerTeamWithFirebase,
+      completeFirebaseAreaProfile,
+      saveTeamAreaNote,
+      deleteTeamAreaNote,
+      loginWithAreaPin,
+      loginWithMpoCredentials,
+      logoutTeam,
+      updateTeamPin,
+      isSuperAdmin,
+      superAdminSource,
+      refreshSuperAdminStatus,
+      setupSuperAdmin,
+      loginSuperAdmin,
+      changeSuperAdminPasscode,
+      logoutSuperAdmin,
+      activeMpo,
+      activeMpoId,
+      setActiveMpoId,
+      theme,
+      toggleTheme,
+      toasts,
+      pushToast,
+      dismissToast,
+      recordModal,
+      openAddModal,
+      openEditModal,
+      closeRecordModal,
+      deleteTarget,
+      isDeleting,
+      requestDeleteRecord,
+      closeDeleteConfirm,
+      confirmDeleteRecord,
+      selectedDoctorId,
+      selectedSpecialistId,
+      selectedProductId,
+      openProductBrief,
+      prefillDetailing,
+      doctorDirectoryHospitalFilter,
+      doctorDirectoryAreaFilter,
+      doctorDirectorySpecialtyFilter,
+      openDoctorProfile,
+      openSpecialistDetail,
+      startDetailingFlow,
+      updateApiUrl,
+      refreshFromServer,
+      syncPendingQueue,
+      flushPendingQueueNow,
+      queueBatchUpdates,
+      submitRecord,
+      removeQueuedItem,
+      clearSyncQueue,
+      resetLocalStarterData,
+      areaMap,
+      hospitalMap,
+      doctorMap,
+      departmentMap,
+      productMap,
+      mpoMap,
+      genericGroups,
+      genericScriptCountMap,
+    ]
+  );
 
-  return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
+  return (
+    <NavigationContext.Provider value={navValue}>
+      <AppContext.Provider value={value}>{children}</AppContext.Provider>
+    </NavigationContext.Provider>
+  );
 };
+
+export function useNavigation(): NavigationContextValue {
+  const ctx = useContext(NavigationContext);
+  if (!ctx) {
+    throw new Error('useNavigation must be used inside AppProvider');
+  }
+  return ctx;
+}
 
 export function useApp(): AppContextValue {
   const ctx = useContext(AppContext);

@@ -19,7 +19,6 @@ import { ProductsCatalogView } from './ProductsCatalogView';
 import { StickyBackBar } from './StickyBackBar';
 import {
   GenericGroup,
-  buildGenericGroups,
   formatBDT,
   matchSpecialistName,
   normalizeGenericKey,
@@ -29,7 +28,7 @@ import { useDebouncedValue, useWindowedList } from '../hooks/useWindowedList';
 type SubTab = 'detailing' | 'catalog';
 type LanguageView = 'both' | 'bn' | 'en';
 
-const WINDOW_PAGE_SIZE = 30;
+const WINDOW_PAGE_SIZE = 20;
 
 interface GenericGroupRowProps {
   group: GenericGroup;
@@ -125,6 +124,7 @@ export const DetailingActivitiesView: React.FC = () => {
   const {
     dataset,
     isSuperAdmin,
+    genericGroups,
     prefillDetailing,
     setPrefillDetailing,
     pushToast,
@@ -148,12 +148,6 @@ export const DetailingActivitiesView: React.FC = () => {
   const [selectedScriptId, setSelectedScriptId] = useState<string | null>(null);
   const [langView, setLangView] = useState<LanguageView>('both');
   const [copiedLang, setCopiedLang] = useState<'bn' | 'en' | null>(null);
-
-  // Group all products + saved detailing scripts by unique Generic Name
-  const genericGroups = useMemo(
-    () => buildGenericGroups(dataset.Products, dataset.Doctor_Product_Detailing),
-    [dataset.Products, dataset.Doctor_Product_Detailing]
-  );
 
   const genericGroupByKey = useMemo(
     () => new Map(genericGroups.map((g) => [g.key, g])),

@@ -528,7 +528,7 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
       {/* Doctor Profile Slide-Over / Full-Screen Mobile View */}
       {selectedDoctor && (
         <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:justify-end bg-black/50 backdrop-blur-xs"
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:justify-end bg-black/60"
           onClick={() => setSelectedDoctorId(null)}
         >
           <div

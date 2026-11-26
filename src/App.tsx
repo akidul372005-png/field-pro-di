@@ -1,5 +1,5 @@
 import React from 'react';
-import { AppProvider, useApp } from './context/AppContext';
+import { AppProvider, useNavigation } from './context/AppContext';
 import { Layout } from './components/Layout';
 import { DashboardView } from './components/DashboardView';
 import { DetailingActivitiesView } from './components/DetailingActivitiesView';
@@ -12,7 +12,7 @@ import { TeamWorkspaceView } from './components/TeamWorkspaceView';
 import { SpecialistsView } from './components/SpecialistsView';
 
 const ActiveScreen: React.FC = () => {
-  const { activeTab } = useApp();
+  const { activeTab } = useNavigation();
 
   switch (activeTab) {
     case 'products':

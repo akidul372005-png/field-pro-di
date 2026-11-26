@@ -4,12 +4,15 @@ import {
   ArrowRight,
   ArrowUpRight,
   BookOpen,
+  Building2,
   Calculator,
   Check,
   ChevronRight,
   CloudOff,
   GraduationCap,
   Lock,
+  LogOut,
+  MapPin,
   Pill,
   RefreshCw,
   Settings,
@@ -17,7 +20,7 @@ import {
   Stethoscope,
   Users,
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp, TeamWorkspaceSubTab } from '../context/AppContext';
 import { GlobalSearchBar } from './GlobalSearchBar';
 import { MEDMENTOR_YOUTUBE_URL, YouTubePlayIcon } from './MedMentorBrand';
 
@@ -243,11 +246,14 @@ export const DashboardView: React.FC = () => {
     isApiConfigured,
     isSuperAdmin,
     teamSession,
+    firebaseUserName,
     isOnline,
     isSyncing,
     isLoadingData,
     syncQueue,
     setActiveTab,
+    openTeamSection,
+    logoutTeam,
     setSelectedSpecialistId,
     startDetailingFlow,
     refreshFromServer,
@@ -268,7 +274,12 @@ export const DashboardView: React.FC = () => {
       setSelectedSpecialistId(null);
     }
     setActiveTab(tab);
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    window.scrollTo({ top: 0, behavior: 'auto' });
+  };
+
+  const handleOpenTeamQuickTab = (subTab: TeamWorkspaceSubTab) => {
+    openTeamSection(subTab);
+    window.scrollTo({ top: 0, behavior: 'auto' });
   };
 
   const handleSyncClick = async () => {
@@ -300,7 +311,7 @@ export const DashboardView: React.FC = () => {
       hoverBorder: 'hover:border-sky-400/60 dark:hover:border-sky-400/50',
       onClick: () => {
         startDetailingFlow({ subTab: 'detailing' });
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        window.scrollTo({ top: 0, behavior: 'auto' });
       },
     },
     {
@@ -586,45 +597,97 @@ export const DashboardView: React.FC = () => {
           </div>
         </button>
 
-        {/* Stacked Row 3: Team / Area Workspace (White Card + Team Silhouette SVG) */}
-        <button
-          type="button"
-          onClick={() => navigateTo('team')}
-          className="group relative overflow-hidden w-full min-h-[52px] sm:min-h-[56px] rounded-2xl bg-white dark:bg-[#0D2235] border border-white/90 dark:border-[#EBF4FA]/10 hover:border-[#0E7C7B]/45 shadow-[0_5px_16px_rgba(10,40,75,0.07)] dark:shadow-black/25 px-3.5 sm:px-4 py-2 flex items-center justify-between gap-2 text-left transition-all duration-150 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-[#0E7C7B] cursor-pointer"
-        >
-          <div className="relative z-10 flex items-center gap-2.5 min-w-0">
-            <div
-              className={`w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                teamSession
-                  ? 'bg-gradient-to-br from-[#14B8A6] to-[#0E7C7B] text-white shadow-sm'
-                  : 'bg-[#EBF3FB] dark:bg-[#13304C] text-[#0D2B45] dark:text-[#7CE0DF]'
-              }`}
-            >
-              {teamSession ? <Users className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
-            </div>
-            <span className="font-display font-bold text-[14.5px] sm:text-[15px] text-[#0D2B45] dark:text-white truncate">
-              Team / Area Workspace
-            </span>
-          </div>
+        {/* Stacked Row 3: Team / Area Workspace — Compact Sign-In Card when signed out; Expanded Officer + Quick-Access Card when signed in */}
+        {teamSession ? (
+          <div className="w-full rounded-2xl bg-white dark:bg-[#0D2235] border border-emerald-500/25 dark:border-[#149A99]/30 shadow-[0_6px_18px_rgba(10,40,75,0.08)] dark:shadow-black/30 p-3 sm:p-3.5 space-y-2.5">
+            {/* Officer Name + District/Area Badge + Sign Out */}
+            <div className="flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => handleOpenTeamQuickTab('doctors')}
+                className="flex items-center gap-2.5 min-w-0 flex-1 text-left cursor-pointer group"
+              >
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#14B8A6] to-[#0E7C7B] text-white shadow-sm flex items-center justify-center shrink-0">
+                  <Users className="w-4 h-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="font-display font-bold text-[14px] sm:text-[15px] text-[#0D2B45] dark:text-white leading-tight truncate group-hover:text-[#0E7C7B] dark:group-hover:text-[#22E3D0] transition-colors">
+                    {teamSession.mpoName || firebaseUserName || 'Field Officer'}
+                  </div>
+                  <div className="flex items-center gap-1 mt-0.5 min-w-0">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-500/15 text-[#0A7D63] dark:text-[#5EEAD4] text-[10.5px] font-semibold truncate max-w-full">
+                      <MapPin className="w-3 h-3 shrink-0" />
+                      <span className="truncate">
+                        {[teamSession.district, teamSession.areaName].filter(Boolean).join(' · ') ||
+                          teamSession.areaName}
+                      </span>
+                    </span>
+                  </div>
+                </div>
+              </button>
 
-          <div className="relative z-10 flex items-center gap-1.5 shrink-0">
-            <div className="hidden xs:block sm:block -my-2 -mr-2">
-              <TeamSilhouetteArtwork />
+              <button
+                type="button"
+                onClick={logoutTeam}
+                aria-label="Sign out of Team Workspace"
+                className="min-h-[34px] px-2.5 py-1 rounded-xl border border-rose-200 dark:border-rose-500/30 bg-rose-50/80 dark:bg-rose-950/35 hover:bg-rose-100 dark:hover:bg-rose-950/60 text-rose-600 dark:text-rose-300 text-[11.5px] font-bold inline-flex items-center gap-1 shrink-0 transition-colors active:scale-[0.96] cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span>Sign Out</span>
+              </button>
             </div>
-            <span
-              className={`inline-flex items-center gap-1 text-xs sm:text-[13px] font-bold whitespace-nowrap ${
-                teamSession
-                  ? 'px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-500/15 text-[#0A8A6A] dark:text-[#5EEAD4]'
-                  : 'text-[#0B8F78] dark:text-[#22E3D0]'
-              }`}
-            >
-              <span className="max-w-[110px] truncate">
-                {teamSession ? teamSession.areaName : 'Sign In'}
-              </span>
-              <ArrowRight className="w-3.5 h-3.5 transition-transform duration-150 group-hover:translate-x-0.5" />
-            </span>
+
+            {/* 4-Pill Quick-Access Row: Doctors · Chambers · Hospitals · Team */}
+            <div className="grid grid-cols-4 gap-1.5">
+              {(
+                [
+                  { id: 'doctors' as TeamWorkspaceSubTab, label: 'Doctors', icon: Stethoscope },
+                  { id: 'chambers' as TeamWorkspaceSubTab, label: 'Chambers', icon: MapPin },
+                  { id: 'hospitals' as TeamWorkspaceSubTab, label: 'Hospitals', icon: Building2 },
+                  { id: 'team' as TeamWorkspaceSubTab, label: 'Team', icon: Users },
+                ] as const
+              ).map((item) => {
+                const QuickIcon = item.icon;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => handleOpenTeamQuickTab(item.id)}
+                    className="min-h-[36px] px-1.5 py-1.5 rounded-xl bg-[#F2F8FC] dark:bg-[#112B44] hover:bg-[#E2F2F4] dark:hover:bg-[#163B5B] border border-[#0D2B45]/8 dark:border-white/10 text-[#0D2B45] dark:text-[#EBF4FA] text-[11px] sm:text-xs font-semibold inline-flex items-center justify-center gap-1 transition-colors active:scale-[0.96] cursor-pointer whitespace-nowrap"
+                  >
+                    <QuickIcon className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#22E3D0] shrink-0" />
+                    <span className="truncate">{item.label}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => navigateTo('team')}
+            className="group relative overflow-hidden w-full min-h-[52px] sm:min-h-[56px] rounded-2xl bg-white dark:bg-[#0D2235] border border-white/90 dark:border-[#EBF4FA]/10 hover:border-[#0E7C7B]/45 shadow-[0_5px_16px_rgba(10,40,75,0.07)] dark:shadow-black/25 px-3.5 sm:px-4 py-2 flex items-center justify-between gap-2 text-left transition-all duration-150 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-[#0E7C7B] cursor-pointer"
+          >
+            <div className="relative z-10 flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center shrink-0 bg-[#EBF3FB] dark:bg-[#13304C] text-[#0D2B45] dark:text-[#7CE0DF]">
+                <Lock className="w-4 h-4" />
+              </div>
+              <span className="font-display font-bold text-[14.5px] sm:text-[15px] text-[#0D2B45] dark:text-white truncate">
+                Team / Area Workspace
+              </span>
+            </div>
+
+            <div className="relative z-10 flex items-center gap-1.5 shrink-0">
+              <div className="hidden xs:block sm:block -my-2 -mr-2">
+                <TeamSilhouetteArtwork />
+              </div>
+              <span className="inline-flex items-center gap-1 text-xs sm:text-[13px] font-bold whitespace-nowrap text-[#0B8F78] dark:text-[#22E3D0]">
+                <span>Sign In</span>
+                <ArrowRight className="w-3.5 h-3.5 transition-transform duration-150 group-hover:translate-x-0.5" />
+              </span>
+            </div>
+          </button>
+        )}
 
         {/* MedMentor BD YouTube Bar with generous mt-3 spacing */}
         <div className="pt-1">

@@ -73,7 +73,7 @@ export const MedMentorBrandCard: React.FC = () => (
 );
 
 export const MedMentorFooter: React.FC = () => (
-  <footer className="w-full border-t border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 bg-white/80 dark:bg-[#0D2235]/80 backdrop-blur-sm pb-20 md:pb-0">
+  <footer className="w-full border-t border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 bg-white dark:bg-[#0D2235] pb-20 md:pb-0">
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex flex-col sm:flex-row items-center justify-between gap-2.5 text-xs">
       <p className="text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 text-center sm:text-left leading-relaxed">
         <span className="font-semibold text-[#0D2B45] dark:text-white">Field Pro – DI</span>{' '}

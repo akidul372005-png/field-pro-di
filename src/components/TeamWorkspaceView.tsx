@@ -2,16 +2,16 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   Building2,
+  Calendar,
   Check,
+  Clock,
   Copy,
-  FileText,
   Lock,
   LogOut,
   Mail,
   MapPin,
   Pencil,
   Phone,
-  Pin,
   Plus,
   Search,
   ShieldCheck,
@@ -20,16 +20,13 @@ import {
   UserPlus,
   Users,
   WifiOff,
-  X,
 } from 'lucide-react';
-import { useApp } from '../context/AppContext';
+import { useApp, TeamWorkspaceSubTab } from '../context/AppContext';
 import { StickyBackBar } from './StickyBackBar';
 import { DoctorsView } from './DoctorsView';
-import { AreaNote } from '../types';
 import { buildAreaIdSlug } from '../services/firebaseTeam';
 
 type AuthMode = 'signin' | 'signup';
-type TeamSubTab = 'doctors' | 'hospitals' | 'notes' | 'team';
 
 const GoogleMark: React.FC<{ className?: string }> = ({ className = 'w-5 h-5' }) => (
   <svg viewBox="0 0 24 24" aria-hidden="true" className={className}>
@@ -86,27 +83,25 @@ const OFFICER_ROLES = [
   'Regional Manager',
 ];
 
-const NOTE_CATEGORIES = ['General', 'Chamber Schedule', 'Field Update', 'Reminder', 'Hospital'];
-
 export const TeamWorkspaceView: React.FC = () => {
   const {
     dataset,
     teamSession,
+    teamSubTab,
+    setTeamSubTab,
     firebaseAuthReady,
     firebaseUserEmail,
     firebaseUserName,
     needsFirebaseAreaSetup,
     firebaseSyncError,
-    areaNotes,
     loginTeamWithGoogle,
     loginTeamWithFirebase,
     registerTeamWithFirebase,
     completeFirebaseAreaProfile,
-    saveTeamAreaNote,
-    deleteTeamAreaNote,
     logoutTeam,
     isOnline,
     areaMap,
+    doctorMap,
     openAddModal,
     openEditModal,
     requestDeleteRecord,
@@ -137,22 +132,13 @@ export const TeamWorkspaceView: React.FC = () => {
     }
   }, [needsFirebaseAreaSetup, firebaseUserName, officerNameInput]);
 
-  // Unlocked workspace state
-  const [activeSubTab, setActiveSubTab] = useState<TeamSubTab>('doctors');
+  // Unlocked workspace state (sub-tab synced via NavigationContext for instant Home quick-pill jumps)
+  const activeSubTab = teamSubTab;
+  const setActiveSubTab = setTeamSubTab;
+  const [chamberSearch, setChamberSearch] = useState('');
   const [hospitalSearch, setHospitalSearch] = useState('');
   const [teamSearch, setTeamSearch] = useState('');
-  const [noteSearch, setNoteSearch] = useState('');
   const [copiedAreaId, setCopiedAreaId] = useState(false);
-
-  // Area Note editor modal state
-  const [noteEditorOpen, setNoteEditorOpen] = useState(false);
-  const [editingNoteId, setEditingNoteId] = useState<string | undefined>(undefined);
-  const [editingNoteCreatedAt, setEditingNoteCreatedAt] = useState<string | undefined>(undefined);
-  const [noteTitle, setNoteTitle] = useState('');
-  const [noteCategory, setNoteCategory] = useState('General');
-  const [noteContent, setNoteContent] = useState('');
-  const [notePinned, setNotePinned] = useState(false);
-  const [noteSaving, setNoteSaving] = useState(false);
 
   const effectiveAreaId = teamSession?.areaId || '';
 
@@ -207,17 +193,22 @@ export const TeamWorkspaceView: React.FC = () => {
     });
   }, [dataset.MPO_Users, effectiveAreaId, teamSearch]);
 
-  const filteredNotes = useMemo(() => {
-    const q = noteSearch.trim().toLowerCase();
-    if (!q) return areaNotes;
-    return areaNotes.filter(
-      (n) =>
-        n.Title.toLowerCase().includes(q) ||
-        n.Content.toLowerCase().includes(q) ||
-        String(n.Category ?? '').toLowerCase().includes(q) ||
-        String(n.Author_Name ?? '').toLowerCase().includes(q)
-    );
-  }, [areaNotes, noteSearch]);
+  const scopedChambers = useMemo(() => {
+    const q = chamberSearch.trim().toLowerCase();
+    return dataset.Chambers.filter((c) => {
+      if (effectiveAreaId && c.Area_ID && c.Area_ID !== effectiveAreaId) return false;
+      if (!q) return true;
+      const docName = doctorMap.get(c.Doctor_ID)?.Doctor_Name || '';
+      return (
+        String(c.Chamber_Name ?? '').toLowerCase().includes(q) ||
+        docName.toLowerCase().includes(q) ||
+        String(c.Address ?? '').toLowerCase().includes(q) ||
+        String(c.Visiting_Days ?? '').toLowerCase().includes(q) ||
+        String(c.Visiting_Hours ?? '').toLowerCase().includes(q) ||
+        String(c.Assistant_Phone ?? '').toLowerCase().includes(q)
+      );
+    });
+  }, [dataset.Chambers, effectiveAreaId, chamberSearch, doctorMap]);
 
   const handleGoogleSignIn = async () => {
     setAuthError('');
@@ -321,58 +312,6 @@ export const TeamWorkspaceView: React.FC = () => {
     } finally {
       setAuthSubmitting(false);
     }
-  };
-
-  const openNewNoteModal = () => {
-    setEditingNoteId(undefined);
-    setEditingNoteCreatedAt(undefined);
-    setNoteTitle('');
-    setNoteCategory('General');
-    setNoteContent('');
-    setNotePinned(false);
-    setNoteEditorOpen(true);
-  };
-
-  const openEditNoteModal = (note: AreaNote) => {
-    setEditingNoteId(note.Note_ID);
-    setEditingNoteCreatedAt(note.Created_At);
-    setNoteTitle(note.Title);
-    setNoteCategory(note.Category || 'General');
-    setNoteContent(note.Content);
-    setNotePinned(Boolean(note.Pinned));
-    setNoteEditorOpen(true);
-  };
-
-  const handleSaveNoteSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!noteTitle.trim() || !noteContent.trim()) return;
-    setNoteSaving(true);
-    try {
-      const ok = await saveTeamAreaNote({
-        Note_ID: editingNoteId,
-        Title: noteTitle.trim(),
-        Content: noteContent.trim(),
-        Category: noteCategory,
-        Pinned: notePinned,
-        Created_At: editingNoteCreatedAt,
-      });
-      if (ok) {
-        setNoteEditorOpen(false);
-      }
-    } finally {
-      setNoteSaving(false);
-    }
-  };
-
-  const handleTogglePinNote = async (note: AreaNote) => {
-    await saveTeamAreaNote({
-      Note_ID: note.Note_ID,
-      Title: note.Title,
-      Content: note.Content,
-      Category: note.Category,
-      Pinned: !note.Pinned,
-      Created_At: note.Created_At,
-    });
   };
 
   const handleCopyAreaId = () => {
@@ -963,6 +902,7 @@ export const TeamWorkspaceView: React.FC = () => {
   // =========================================================================
   // UNLOCKED STATE: Area-Scoped Private Firestore Workspace
   // =========================================================================
+  const officerDisplayName = teamSession.mpoName || firebaseUserName || 'Field Officer';
   const activeScopeMeta = [teamSession.district, teamSession.upazila]
     .filter(Boolean)
     .join(' · ');
@@ -970,52 +910,77 @@ export const TeamWorkspaceView: React.FC = () => {
   return (
     <div className="space-y-4 sm:space-y-5">
       <StickyBackBar
-        title={teamSession.areaName}
-        subtitle={
-          teamSession.mpoName
-            ? `${teamSession.mpoName}${teamSession.role ? ` · ${teamSession.role}` : ''}`
-            : activeScopeMeta || 'Private Area Workspace'
-        }
+        title="Team Workspace"
+        subtitle={teamSession.areaName}
         rightSlot={
           <button
             type="button"
             onClick={logoutTeam}
-            className="min-h-[40px] px-3 rounded-xl border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 bg-white dark:bg-[#0D2235] text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors"
+            className="min-h-[38px] px-3 rounded-xl border border-rose-200 dark:border-rose-500/35 bg-rose-50 dark:bg-rose-950/40 text-xs font-bold text-rose-600 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-950/60 inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors"
           >
             <LogOut className="w-3.5 h-3.5" />
-            <span>Sign Out</span>
+            <span>Logout</span>
           </button>
         }
       />
 
-      {/* Area Context Header */}
-      <div className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-xs font-medium text-[#0E7C7B] dark:text-[#149A99]">
-            Private Area Workspace · {isOnline ? 'Live Cloud Sync' : 'Offline Cached'}
+      {/* Sticky Officer Header (always visible while browsing Doctors, Chambers, Hospitals, Team) */}
+      <div className="sticky top-[52px] md:top-16 z-20 rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 shadow-sm p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#14B8A6] to-[#0E7C7B] text-white flex items-center justify-center shrink-0 shadow-sm">
+            <Users className="w-5 h-5" />
           </div>
-          <h1 className="text-xl sm:text-2xl font-display font-bold text-[#0D2B45] dark:text-white tracking-tight mt-0.5 truncate">
-            {teamSession.areaName}
-          </h1>
-          <p className="text-xs sm:text-sm text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 mt-0.5">
-            {activeScopeMeta || 'Assigned Territory'}
-            {teamSession.mpoName ? ` · ${teamSession.mpoName}` : ''}
-          </p>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              <h1 className="text-base sm:text-lg font-display font-bold text-[#0D2B45] dark:text-white tracking-tight truncate">
+                {officerDisplayName}
+              </h1>
+              {teamSession.role && (
+                <span className="px-2 py-0.5 rounded-md bg-[#0D2B45]/8 dark:bg-[#133859] text-[10.5px] font-bold text-[#0D2B45]/80 dark:text-[#7CE0DF]">
+                  {teamSession.role}
+                </span>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5 text-xs">
+              <span className="inline-flex items-center gap-1 font-semibold text-[#0E7C7B] dark:text-[#22E3D0]">
+                <MapPin className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">
+                  {teamSession.areaName}
+                  {activeScopeMeta ? ` · ${activeScopeMeta}` : ''}
+                </span>
+              </span>
+              <span className="text-[#0D2B45]/45 dark:text-[#EBF4FA]/45">·</span>
+              <span className="text-[11px] font-medium text-[#0D2B45]/65 dark:text-[#EBF4FA]/65">
+                {isOnline ? 'Firestore Synced' : 'Offline Cached'}
+              </span>
+            </div>
+          </div>
         </div>
 
-        <button
-          type="button"
-          onClick={handleCopyAreaId}
-          title="Copy Area ID to share with teammates in the same area"
-          className="min-h-[38px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 hover:border-[#0E7C7B] text-xs font-mono text-[#0D2B45]/80 dark:text-[#EBF4FA]/85 inline-flex items-center gap-1.5 self-start sm:self-center shrink-0 cursor-pointer transition-colors"
-        >
-          <span className="truncate max-w-[180px]">ID: {effectiveAreaId}</span>
-          {copiedAreaId ? (
-            <Check className="w-3.5 h-3.5 text-[#0E7C7B]" />
-          ) : (
-            <Copy className="w-3.5 h-3.5 text-[#0D2B45]/50 dark:text-[#EBF4FA]/50" />
-          )}
-        </button>
+        <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+          <button
+            type="button"
+            onClick={handleCopyAreaId}
+            title="Copy Area ID to share with teammates in the same area"
+            className="min-h-[38px] px-2.5 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 hover:border-[#0E7C7B] text-[11px] sm:text-xs font-mono text-[#0D2B45]/80 dark:text-[#EBF4FA]/85 inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+          >
+            <span className="truncate max-w-[130px] sm:max-w-[160px]">ID: {effectiveAreaId}</span>
+            {copiedAreaId ? (
+              <Check className="w-3.5 h-3.5 text-[#0E7C7B]" />
+            ) : (
+              <Copy className="w-3.5 h-3.5 text-[#0D2B45]/50 dark:text-[#EBF4FA]/50" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={logoutTeam}
+            className="min-h-[38px] px-3 rounded-xl border border-rose-200 dark:border-rose-500/35 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-950/60 text-xs font-bold text-rose-600 dark:text-rose-300 inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors active:scale-[0.97]"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Logout</span>
+          </button>
+        </div>
       </div>
 
       {/* Firestore Sync Error Banner (shown only if Firestore security rules block access) */}
@@ -1029,7 +994,7 @@ export const TeamWorkspaceView: React.FC = () => {
         </div>
       )}
 
-      {/* 4 Clean Workspace Sub-Tabs: Doctors | Hospitals | Notes | Team */}
+      {/* 4 Full Working Firestore Tabs: Doctors | Chambers | Hospitals | Team */}
       <div
         role="tablist"
         aria-label="Team workspace sections"
@@ -1038,25 +1003,25 @@ export const TeamWorkspaceView: React.FC = () => {
         {(
           [
             {
-              id: 'doctors' as TeamSubTab,
+              id: 'doctors' as TeamWorkspaceSubTab,
               label: 'Doctors',
               count: scopedDoctorsCount,
               icon: Stethoscope,
             },
             {
-              id: 'hospitals' as TeamSubTab,
+              id: 'chambers' as TeamWorkspaceSubTab,
+              label: 'Chambers',
+              count: scopedChambers.length,
+              icon: MapPin,
+            },
+            {
+              id: 'hospitals' as TeamWorkspaceSubTab,
               label: 'Hospitals',
               count: scopedHospitals.length,
               icon: Building2,
             },
             {
-              id: 'notes' as TeamSubTab,
-              label: 'Notes',
-              count: areaNotes.length,
-              icon: FileText,
-            },
-            {
-              id: 'team' as TeamSubTab,
+              id: 'team' as TeamWorkspaceSubTab,
               label: 'Team',
               count: scopedTeamMembers.length,
               icon: Users,
@@ -1090,9 +1055,138 @@ export const TeamWorkspaceView: React.FC = () => {
         })}
       </div>
 
-      {/* SUB-TAB 1: AREA-SCOPED DOCTORS & CHAMBERS */}
+      {/* SUB-TAB 1: AREA-SCOPED DOCTORS */}
       {activeSubTab === 'doctors' && (
         <DoctorsView areaScopeId={effectiveAreaId} embeddedInTeam />
+      )}
+
+      {/* SUB-TAB 2: AREA-SCOPED CHAMBERS */}
+      {activeSubTab === 'chambers' && (
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="relative flex-1 max-w-md">
+              <Search
+                className="w-4 h-4 text-[#0D2B45]/45 dark:text-[#EBF4FA]/45 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                aria-hidden="true"
+              />
+              <input
+                type="search"
+                value={chamberSearch}
+                onChange={(e) => setChamberSearch(e.target.value)}
+                placeholder="Search chambers, doctor, days, or address..."
+                aria-label="Search area chambers"
+                className="w-full min-h-[44px] pl-10 pr-3 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-base md:text-sm text-[#0D2B45] dark:text-white placeholder:text-[#0D2B45]/45 dark:placeholder:text-[#EBF4FA]/40 focus:outline-none focus:border-[#0E7C7B]"
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={() => openAddModal('Chambers', { Area_ID: effectiveAreaId })}
+              className="min-h-[44px] px-4 rounded-xl bg-[#0D2B45] hover:bg-[#133859] dark:bg-[#0E7C7B] dark:hover:bg-[#149A99] text-white text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Add Chamber</span>
+            </button>
+          </div>
+
+          {scopedChambers.length === 0 ? (
+            <div className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-8 text-center">
+              <MapPin className="w-7 h-7 text-[#0E7C7B] dark:text-[#149A99] mx-auto mb-2" />
+              <p className="font-display font-semibold text-base text-[#0D2B45] dark:text-white">
+                {chamberSearch
+                  ? 'No matching chambers found'
+                  : `No chambers added in ${teamSession.areaName} yet`}
+              </p>
+              <p className="text-xs sm:text-sm text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 mt-1">
+                Add consultation chambers with visiting days, hours, and assistant phone numbers.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+              {scopedChambers.map((chamber, idx) => {
+                const linkedDoctor = doctorMap.get(chamber.Doctor_ID);
+                return (
+                  <article
+                    key={`${chamber.Chamber_ID}-${idx}`}
+                    className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-4 sm:p-5 flex flex-col justify-between gap-3"
+                  >
+                    <div>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <h2 className="font-display font-bold text-base text-[#0D2B45] dark:text-white leading-snug">
+                            {chamber.Chamber_Name}
+                          </h2>
+                          {linkedDoctor && (
+                            <div className="mt-0.5 text-xs font-semibold text-[#0E7C7B] dark:text-[#22E3D0] truncate">
+                              {linkedDoctor.Doctor_Name}
+                              {linkedDoctor.Specialty ? ` · ${linkedDoctor.Specialty}` : ''}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-0.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              openEditModal('Chambers', chamber as unknown as Record<string, unknown>)
+                            }
+                            aria-label={`Edit ${chamber.Chamber_Name}`}
+                            className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-lg text-[#0D2B45]/60 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/60 dark:hover:text-[#149A99] hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/50 cursor-pointer"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              requestDeleteRecord(
+                                'Chambers',
+                                chamber as unknown as Record<string, unknown>,
+                                chamber.Chamber_Name
+                              )
+                            }
+                            aria-label={`Delete ${chamber.Chamber_Name}`}
+                            className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-lg text-[#0D2B45]/55 hover:text-rose-600 dark:text-[#EBF4FA]/55 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 pt-3 border-t border-[#0D2B45]/8 dark:border-[#EBF4FA]/8 space-y-1.5 text-xs text-[#0D2B45]/75 dark:text-[#EBF4FA]/75">
+                        {chamber.Visiting_Days && (
+                          <div className="flex items-start gap-1.5">
+                            <Calendar className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#149A99] shrink-0 mt-0.5" />
+                            <span>{chamber.Visiting_Days}</span>
+                          </div>
+                        )}
+                        {chamber.Visiting_Hours && (
+                          <div className="flex items-start gap-1.5">
+                            <Clock className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#149A99] shrink-0 mt-0.5" />
+                            <span>{chamber.Visiting_Hours}</span>
+                          </div>
+                        )}
+                        {chamber.Address && (
+                          <div className="flex items-start gap-1.5">
+                            <MapPin className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#149A99] shrink-0 mt-0.5" />
+                            <span>{chamber.Address}</span>
+                          </div>
+                        )}
+                        {chamber.Assistant_Phone && (
+                          <div className="flex items-center gap-1.5 font-mono">
+                            <Phone className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#149A99] shrink-0" />
+                            <a href={`tel:${chamber.Assistant_Phone}`} className="hover:underline">
+                              {chamber.Assistant_Phone}
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </div>
       )}
 
       {/* SUB-TAB 2: AREA-SCOPED HOSPITALS */}
@@ -1227,124 +1321,7 @@ export const TeamWorkspaceView: React.FC = () => {
         </div>
       )}
 
-      {/* SUB-TAB 3: PRIVATE AREA NOTES */}
-      {activeSubTab === 'notes' && (
-        <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="relative flex-1 max-w-md">
-              <Search
-                className="w-4 h-4 text-[#0D2B45]/45 dark:text-[#EBF4FA]/45 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
-                aria-hidden="true"
-              />
-              <input
-                type="search"
-                value={noteSearch}
-                onChange={(e) => setNoteSearch(e.target.value)}
-                placeholder="Search private area notes..."
-                aria-label="Search area notes"
-                className="w-full min-h-[44px] pl-10 pr-3 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-base md:text-sm text-[#0D2B45] dark:text-white placeholder:text-[#0D2B45]/45 dark:placeholder:text-[#EBF4FA]/40 focus:outline-none focus:border-[#0E7C7B]"
-              />
-            </div>
-
-            <button
-              type="button"
-              onClick={openNewNoteModal}
-              className="min-h-[44px] px-4 rounded-xl bg-[#0D2B45] hover:bg-[#133859] dark:bg-[#0E7C7B] dark:hover:bg-[#149A99] text-white text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Add Area Note</span>
-            </button>
-          </div>
-
-          {filteredNotes.length === 0 ? (
-            <div className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-8 text-center">
-              <FileText className="w-7 h-7 text-[#0E7C7B] dark:text-[#149A99] mx-auto mb-2" />
-              <p className="font-display font-semibold text-base text-[#0D2B45] dark:text-white">
-                {noteSearch ? 'No matching area notes' : `No area notes in ${teamSession.areaName} yet`}
-              </p>
-              <p className="text-xs sm:text-sm text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 mt-1">
-                Save chamber updates, doctor availability reminders, or territory coordination notes.
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-              {filteredNotes.map((note) => (
-                <article
-                  key={note.Note_ID}
-                  className={`rounded-2xl bg-white dark:bg-[#0D2235] border p-4 sm:p-5 flex flex-col justify-between gap-3 ${
-                    note.Pinned
-                      ? 'border-[#0E7C7B]/50 dark:border-[#149A99]/50'
-                      : 'border-[#0D2B45]/10 dark:border-[#EBF4FA]/10'
-                  }`}
-                >
-                  <div className="space-y-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          {note.Pinned && (
-                            <span className="text-[10px] font-bold uppercase tracking-wider text-[#0E7C7B] dark:text-[#7CE0DF]">
-                              Pinned ·
-                            </span>
-                          )}
-                          <span className="text-[11px] font-semibold text-[#0E7C7B] dark:text-[#149A99]">
-                            {note.Category || 'General'}
-                          </span>
-                        </div>
-                        <h2 className="font-display font-bold text-base text-[#0D2B45] dark:text-white leading-snug mt-0.5">
-                          {note.Title}
-                        </h2>
-                      </div>
-
-                      <div className="flex items-center gap-0.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => void handleTogglePinNote(note)}
-                          aria-label={note.Pinned ? 'Unpin note' : 'Pin note'}
-                          title={note.Pinned ? 'Unpin' : 'Pin to top'}
-                          className={`min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg cursor-pointer transition-colors ${
-                            note.Pinned
-                              ? 'text-[#0E7C7B] dark:text-[#7CE0DF] bg-[#EBF4FA] dark:bg-[#133859]'
-                              : 'text-[#0D2B45]/50 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/50 hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/50'
-                          }`}
-                        >
-                          <Pin className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openEditNoteModal(note)}
-                          aria-label={`Edit ${note.Title}`}
-                          className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-[#0D2B45]/60 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/60 dark:hover:text-[#149A99] hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/50 cursor-pointer"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void deleteTeamAreaNote(note.Note_ID)}
-                          aria-label={`Delete ${note.Title}`}
-                          className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-[#0D2B45]/55 hover:text-rose-600 dark:text-[#EBF4FA]/55 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-
-                    <p className="text-xs sm:text-sm text-[#0D2B45]/80 dark:text-[#EBF4FA]/85 whitespace-pre-wrap leading-relaxed">
-                      {note.Content}
-                    </p>
-                  </div>
-
-                  <div className="pt-2.5 border-t border-[#0D2B45]/8 dark:border-[#EBF4FA]/8 flex items-center justify-between gap-2 text-[11px] text-[#0D2B45]/55 dark:text-[#EBF4FA]/55">
-                    <span className="truncate">{note.Author_Name || 'Area Officer'}</span>
-                    <span className="font-mono tabular-nums shrink-0">
-                      {new Date(note.Updated_At).toLocaleDateString()}
-                    </span>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+      {/* SUB-TAB 4: AREA TEAM DIRECTORY */}
 
       {/* SUB-TAB 4: AREA TEAM DIRECTORY */}
       {activeSubTab === 'team' && (
@@ -1405,16 +1382,32 @@ export const TeamWorkspaceView: React.FC = () => {
                             : ''}
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          openEditModal('MPO_Users', member as unknown as Record<string, unknown>)
-                        }
-                        aria-label={`Edit ${member.MPO_Name}`}
-                        className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-lg text-[#0D2B45]/60 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/60 dark:hover:text-[#149A99] hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/50 cursor-pointer shrink-0"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openEditModal('MPO_Users', member as unknown as Record<string, unknown>)
+                          }
+                          aria-label={`Edit ${member.MPO_Name}`}
+                          className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-lg text-[#0D2B45]/60 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/60 dark:hover:text-[#149A99] hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/50 cursor-pointer"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            requestDeleteRecord(
+                              'MPO_Users',
+                              member as unknown as Record<string, unknown>,
+                              member.MPO_Name
+                            )
+                          }
+                          aria-label={`Delete ${member.MPO_Name}`}
+                          className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-lg text-[#0D2B45]/55 hover:text-rose-600 dark:text-[#EBF4FA]/55 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
 
                     <div className="pt-3 border-t border-[#0D2B45]/8 dark:border-[#EBF4FA]/8 space-y-1.5 text-xs text-[#0D2B45]/75 dark:text-[#EBF4FA]/75">
@@ -1450,109 +1443,6 @@ export const TeamWorkspaceView: React.FC = () => {
         </div>
       )}
 
-      {/* AREA NOTE EDITOR MODAL */}
-      {noteEditorOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-[#071522]/60 backdrop-blur-xs p-0 sm:p-4"
-          role="dialog"
-          aria-modal="true"
-          aria-label={editingNoteId ? 'Edit Area Note' : 'New Area Note'}
-        >
-          <div className="w-full sm:max-w-lg rounded-t-3xl sm:rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 p-5 sm:p-6 space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="font-display font-bold text-lg text-[#0D2B45] dark:text-white">
-                {editingNoteId ? 'Edit Area Note' : 'New Area Note'}
-              </h2>
-              <button
-                type="button"
-                onClick={() => setNoteEditorOpen(false)}
-                aria-label="Close note editor"
-                className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 hover:bg-[#F4F8FC] dark:hover:bg-[#133859] cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveNoteSubmit} className="space-y-3.5">
-              <div>
-                <label className="block text-xs font-semibold text-[#0D2B45] dark:text-[#EBF4FA] mb-1">
-                  Title *
-                </label>
-                <input
-                  type="text"
-                  required
-                  maxLength={140}
-                  value={noteTitle}
-                  onChange={(e) => setNoteTitle(e.target.value)}
-                  placeholder="e.g. Friday evening chamber update"
-                  className="w-full min-h-[44px] px-3.5 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
-                />
-              </div>
-
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex-1">
-                  <label className="block text-xs font-semibold text-[#0D2B45] dark:text-[#EBF4FA] mb-1">
-                    Category
-                  </label>
-                  <select
-                    value={noteCategory}
-                    onChange={(e) => setNoteCategory(e.target.value)}
-                    className="w-full min-h-[42px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
-                  >
-                    {NOTE_CATEGORIES.map((cat) => (
-                      <option key={cat} value={cat}>
-                        {cat}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <label className="pt-5 inline-flex items-center gap-2 text-xs font-semibold text-[#0D2B45] dark:text-[#EBF4FA] cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={notePinned}
-                    onChange={(e) => setNotePinned(e.target.checked)}
-                    className="w-4 h-4 accent-[#0E7C7B] rounded"
-                  />
-                  <span>Pin note</span>
-                </label>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-[#0D2B45] dark:text-[#EBF4FA] mb-1">
-                  Note Details *
-                </label>
-                <textarea
-                  required
-                  rows={5}
-                  maxLength={3000}
-                  value={noteContent}
-                  onChange={(e) => setNoteContent(e.target.value)}
-                  placeholder="Write territory notes, doctor availability updates, or reminders..."
-                  className="w-full p-3.5 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B] resize-y"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => setNoteEditorOpen(false)}
-                  className="min-h-[44px] px-4 rounded-xl border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-xs sm:text-sm font-semibold text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={noteSaving || !noteTitle.trim() || !noteContent.trim()}
-                  className="min-h-[44px] px-5 rounded-xl bg-[#0E7C7B] hover:bg-[#095C5B] disabled:opacity-50 text-white text-xs sm:text-sm font-semibold cursor-pointer transition-colors"
-                >
-                  {noteSaving ? 'Saving...' : editingNoteId ? 'Update Note' : 'Save Note'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

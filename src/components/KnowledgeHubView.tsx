@@ -25,7 +25,7 @@ import { useDebouncedValue, useWindowedList } from '../hooks/useWindowedList';
 
 type KnowledgeTabKey = 'mpo_desk' | 'medical_knowledge';
 
-const WINDOW_PAGE_SIZE = 30;
+const WINDOW_PAGE_SIZE = 20;
 
 interface KnowledgeChapterCardProps {
   chapter: KnowledgeChapter;
@@ -803,7 +803,7 @@ export const KnowledgeHubView: React.FC = () => {
           role="dialog"
           aria-modal="true"
           aria-labelledby="knowledge-reader-title"
-          className="fixed inset-0 z-50 flex justify-end bg-[#071522]/65 backdrop-blur-xs"
+          className="fixed inset-0 z-50 flex justify-end bg-[#071522]/75"
           onClick={() => setSelectedChapter(null)}
         >
           <div

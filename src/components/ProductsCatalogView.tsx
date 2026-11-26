@@ -12,7 +12,6 @@ import {
 import { useApp } from '../context/AppContext';
 import { Product, PRODUCT_GROUP_CODES, ProductGroupCode } from '../types';
 import {
-  buildGenericGroups,
   formatBDT,
   normalizeGenericKey,
   normalizeProductGroup,
@@ -27,7 +26,7 @@ interface ProductsCatalogViewProps {
   onOpenGenericDetailing?: (genericName: string, productId: string) => void;
 }
 
-const WINDOW_PAGE_SIZE = 30;
+const WINDOW_PAGE_SIZE = 20;
 
 const GROUP_BADGE_STYLE: Partial<Record<ProductGroupCode, string>> = {
   A: 'bg-[#0D2B45]/10 text-[#0D2B45] dark:bg-[#0E7C7B]/25 dark:text-[#7CE0DF]',
@@ -288,6 +287,7 @@ export const ProductsCatalogView: React.FC<ProductsCatalogViewProps> = ({
   const {
     dataset,
     isSuperAdmin,
+    genericScriptCountMap,
     navigateHome,
     openProductBrief,
     openAddModal,
@@ -302,16 +302,6 @@ export const ProductsCatalogView: React.FC<ProductsCatalogViewProps> = ({
 
   // Debounce keystrokes by 150ms so searching 800+ products stays butter-smooth on mobile
   const debouncedSearch = useDebouncedValue(searchQuery, 150);
-
-  // Map normalized generic name -> saved detailing script count
-  const genericScriptCountMap = useMemo(() => {
-    const groups = buildGenericGroups(dataset.Products, dataset.Doctor_Product_Detailing);
-    const map = new Map<string, number>();
-    groups.forEach((g) => {
-      map.set(g.key, g.scripts.length);
-    });
-    return map;
-  }, [dataset.Products, dataset.Doctor_Product_Detailing]);
 
   // Precompute normalized filter fields + lowercased search haystack once per product load
   const indexedProducts = useMemo(

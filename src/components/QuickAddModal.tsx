@@ -1330,7 +1330,7 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/55 backdrop-blur-xs p-0 sm:p-4"
+      className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/65 p-0 sm:p-4"
       onClick={onClose}
     >
       <div

@@ -147,7 +147,7 @@ export const ProductBriefModal: React.FC = () => {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:justify-end bg-black/55 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:justify-end bg-black/65"
       onClick={() => setSelectedProductId(null)}
     >
       <div

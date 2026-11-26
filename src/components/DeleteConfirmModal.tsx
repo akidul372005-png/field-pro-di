@@ -24,7 +24,7 @@ export const DeleteConfirmModal: React.FC = () => {
 
   return (
     <div
-      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/55 backdrop-blur-xs p-4"
+      className="fixed inset-0 z-[70] flex items-center justify-center bg-black/65 p-4"
       onClick={closeDeleteConfirm}
     >
       <div
