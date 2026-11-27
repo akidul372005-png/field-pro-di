@@ -257,6 +257,17 @@ interface AppContextValue {
   // Navigation shortcuts
   openDoctorProfile: (doctorId: string) => void;
   openSpecialistDetail: (specialistNameOrId: string) => void;
+  pendingKnowledgeChapter: {
+    tab: 'mpo_desk' | 'medical_knowledge';
+    chapterNo: string;
+  } | null;
+  setPendingKnowledgeChapter: (
+    val: { tab: 'mpo_desk' | 'medical_knowledge'; chapterNo: string } | null
+  ) => void;
+  openKnowledgeChapter: (
+    tab: 'mpo_desk' | 'medical_knowledge',
+    chapterNo: string
+  ) => void;
   startDetailingFlow: (opts: {
     doctorId?: string;
     productId?: string;
@@ -395,6 +406,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [selectedDoctorId, setSelectedDoctorId] = useState<string | null>(null);
   const [selectedSpecialistId, setSelectedSpecialistId] = useState<string | null>(null);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+  const [pendingKnowledgeChapter, setPendingKnowledgeChapter] = useState<{
+    tab: 'mpo_desk' | 'medical_knowledge';
+    chapterNo: string;
+  } | null>(null);
   const [prefillDetailing, setPrefillDetailing] = useState<{
     doctorId?: string;
     productId?: string;
@@ -1928,6 +1943,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSelectedProductId(productId);
   }, []);
 
+  const openKnowledgeChapter = useCallback(
+    (tab: 'mpo_desk' | 'medical_knowledge', chapterNo: string) => {
+      const cleaned = String(chapterNo ?? '').trim();
+      if (!cleaned) return;
+      startTransition(() => {
+        setPendingKnowledgeChapter({ tab, chapterNo: cleaned });
+        setActiveTabState('knowledge');
+      });
+      if (typeof window !== 'undefined') {
+        window.scrollTo({ top: 0, behavior: 'auto' });
+      }
+    },
+    []
+  );
+
   const startDetailingFlow = useCallback(
     (opts: {
       doctorId?: string;
@@ -2041,6 +2071,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setDoctorDirectorySpecialtyFilter,
     openDoctorProfile,
     openSpecialistDetail,
+    pendingKnowledgeChapter,
+    setPendingKnowledgeChapter,
+    openKnowledgeChapter,
     startDetailingFlow,
     updateApiUrl,
     refreshFromServer,
@@ -2135,6 +2168,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       doctorDirectorySpecialtyFilter,
       openDoctorProfile,
       openSpecialistDetail,
+      pendingKnowledgeChapter,
+      openKnowledgeChapter,
       startDetailingFlow,
       updateApiUrl,
       refreshFromServer,

@@ -2998,7 +2998,12 @@ export function loadCachedDiseaseGuide(indicationName: string): DiseaseGuideBN |
       specialistWarning: parsed.specialistWarning ? String(parsed.specialistWarning).trim() : undefined,
       mpoDetailingFocus: sanitizeGuideList(parsed.mpoDetailingFocus),
       rawSheetText: parsed.rawSheetText ? String(parsed.rawSheetText).trim() : undefined,
-      source: parsed.source === 'sheet' ? 'sheet' : 'ai',
+      source:
+        parsed.source === 'sheet' ||
+        parsed.source === 'local' ||
+        parsed.source === 'knowledge'
+          ? parsed.source
+          : 'ai',
       generatedAt: String(parsed.generatedAt || new Date().toISOString()),
     };
   } catch {

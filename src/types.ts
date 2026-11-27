@@ -146,7 +146,7 @@ export interface DiseaseGuideBN {
   specialistWarning?: string;
   mpoDetailingFocus: string[];
   rawSheetText?: string;
-  source: 'sheet' | 'ai';
+  source: 'sheet' | 'ai' | 'local' | 'knowledge';
   generatedAt: string;
 }
 

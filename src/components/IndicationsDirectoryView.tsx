@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  AlertCircle,
   AlertTriangle,
   ArrowLeft,
   BookOpen,
@@ -25,8 +24,6 @@ import { StickyBackBar } from './StickyBackBar';
 import { WatchNowButton } from './WatchNowButton';
 import { DiseaseGuideBN, Indication, Product } from '../types';
 import {
-  fetchDiseaseGuideFromServer,
-  formatDiseaseGuideForCopy,
   getEffectiveIndications,
   isActiveRecord,
   loadCachedDiseaseGuide,
@@ -36,11 +33,18 @@ import {
   parseClinicalIndications,
   parseCommaList,
   parsePreferredGenerics,
-  parseSheetDescriptionBn,
   productMatchesPreferredGeneric,
   saveCachedDiseaseGuide,
   scriptMatchesGenericGroup,
 } from '../services/api';
+import {
+  buildClientDiseaseGuideBN,
+  enhanceDiseaseGuideWithClientGemini,
+  findMatchingMedicalKnowledgeChapter,
+  formatEnhancedGuideForCopy,
+  formatProductPriceCompact,
+  hasClientGeminiKey,
+} from '../services/diseaseGuideClient';
 
 import { useDebouncedValue, useWindowedList } from '../hooks/useWindowedList';
 
@@ -133,6 +137,7 @@ export const IndicationsDirectoryView: React.FC<IndicationsDirectoryViewProps> =
     setActiveTab,
     openProductBrief,
     openSpecialistDetail,
+    openKnowledgeChapter,
     selectedSpecialistId,
     setSelectedSpecialistId,
     startDetailingFlow,
@@ -148,24 +153,11 @@ export const IndicationsDirectoryView: React.FC<IndicationsDirectoryViewProps> =
   const [drawerGenericFilter, setDrawerGenericFilter] = useState<string | null>(null);
   const [specialistGenericFilter, setSpecialistGenericFilter] = useState<string | null>(null);
 
-  // Bengali Disease Guide state
-  const [diseaseGuide, setDiseaseGuide] = useState<DiseaseGuideBN | null>(null);
-  const [isLoadingGuide, setIsLoadingGuide] = useState(false);
-  const [guideError, setGuideError] = useState<string | null>(null);
+  // Bengali Disease Guide state (instant client-side guide + optional cached/Gemini enhancement)
+  const [enhancedGuide, setEnhancedGuide] = useState<DiseaseGuideBN | null>(null);
+  const [isEnhancingGuide, setIsEnhancingGuide] = useState(false);
   const [copiedGuide, setCopiedGuide] = useState(false);
-  const guideAbortRef = useRef<AbortController | null>(null);
   const guideRequestSeqRef = useRef(0);
-  const loadedGuideKeyRef = useRef<string | null>(null);
-  const selectedEntryRef = useRef<{
-    indication: Indication;
-    category: string;
-    specialists: string[];
-    generics: string[];
-  } | null>(null);
-  const matchedContextRef = useRef<{
-    therapeuticClasses: string[];
-    matchedBrands: string[];
-  }>({ therapeuticClasses: [], matchedBrands: [] });
 
   const { indications: allIndications, isDerivedFallback } = useMemo(
     () => getEffectiveIndications(dataset),
@@ -343,27 +335,49 @@ export const IndicationsDirectoryView: React.FC<IndicationsDirectoryViewProps> =
     return matchProductsForIndicationRecord(dataset.Products, selectedEntry.indication);
   }, [selectedEntry, dataset.Products]);
 
-  // Extract unique therapeutic classes & top brand names from matched DIL products for MPO Detailing context
-  const matchedContextForGuide = useMemo(() => {
-    const classes: string[] = [];
-    const brands: string[] = [];
+  // Match synced Medical_Knowledge Bengali chapter (e.g. UTI -> MK-23, Pneumonia -> MK-35, PCOS -> MK-31)
+  const matchedKnowledgeChapter = useMemo(() => {
+    if (!selectedEntry) return null;
+    return findMatchingMedicalKnowledgeChapter(
+      selectedEntry.indication.Indication_Name,
+      selectedEntry.category,
+      selectedEntry.generics,
+      dataset.Medical_Knowledge || []
+    );
+  }, [selectedEntry, dataset.Medical_Knowledge]);
+
+  // Instant 100% offline/online structured Bengali Disease Guide for all 500 indications
+  const builtInDiseaseGuide = useMemo(() => {
+    if (!selectedEntry) return null;
+    return buildClientDiseaseGuideBN({
+      indicationName: selectedEntry.indication.Indication_Name,
+      category: selectedEntry.category,
+      specialists: selectedEntry.specialists,
+      keyGenerics: selectedEntry.generics,
+      matchedProducts: matchedProductsForDrawer,
+      matchedChapter: matchedKnowledgeChapter,
+      sheetDescriptionBn: selectedEntry.indication.Description_BN,
+    });
+  }, [selectedEntry, matchedProductsForDrawer, matchedKnowledgeChapter]);
+
+  // Unique top Drug International brands (with prices) for quick display inside বিস্তারিত
+  const topMatchedBrandsForGuide = useMemo(() => {
+    const seen = new Set<string>();
+    const results: Product[] = [];
     for (const { product } of matchedProductsForDrawer) {
-      const cls = String(product.Therapeutic_Class ?? '').trim();
-      if (cls && !classes.some((c) => c.toLowerCase() === cls.toLowerCase())) {
-        classes.push(cls);
-      }
-      const bName = String(product.Brand_Name || product.Product_Name || '').trim();
-      if (bName && !brands.some((b) => b.toLowerCase() === bName.toLowerCase())) {
-        brands.push(bName);
-      }
-      if (classes.length >= 8 && brands.length >= 8) break;
+      const brand = String(product.Brand_Name || product.Product_Name || '').trim();
+      if (!brand) continue;
+      const dedupeKey = `${brand.toLowerCase()}|${String(product.Strength ?? '').toLowerCase()}|${String(product.Dosage_Form ?? '').toLowerCase()}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      results.push(product);
+      if (results.length >= 6) break;
     }
-    return { therapeuticClasses: classes, matchedBrands: brands };
+    return results;
   }, [matchedProductsForDrawer]);
 
-  // Keep refs fresh so async requests always read the latest context without re-triggering effects
-  selectedEntryRef.current = selectedEntry;
-  matchedContextRef.current = matchedContextForGuide;
+  // Active guide is ALWAYS immediately available (cached AI guide if present, else instant built-in Bengali guide)
+  const activeDiseaseGuide = enhancedGuide || builtInDiseaseGuide;
 
   // Per-generic match count inside the open drawer so each Key Generic chip shows its DIL brand count
   const drawerGenericCounts = useMemo(() => {
@@ -384,143 +398,73 @@ export const IndicationsDirectoryView: React.FC<IndicationsDirectoryViewProps> =
     );
   }, [matchedProductsForDrawer, drawerGenericFilter]);
 
-  const loadOrGenerateDiseaseGuide = useCallback(
-    async (
-      entry: {
-        indication: Indication;
-        category: string;
-        specialists: string[];
-        generics: string[];
-      },
-      forceRegenerate = false
-    ) => {
-      // Cancel any previous in-flight request cleanly
-      if (guideAbortRef.current) {
-        guideAbortRef.current.abort();
-        guideAbortRef.current = null;
-      }
-
-      const requestSeq = ++guideRequestSeqRef.current;
-      const indicationName = String(entry.indication.Indication_Name ?? '').trim();
-      const indicationKey = indicationName.toLowerCase().replace(/\s+/g, ' ');
-
-      setGuideError(null);
-      setCopiedGuide(false);
-
-      if (!indicationName) {
-        setIsLoadingGuide(false);
-        setGuideError('ইন্ডিকেশনের নাম পাওয়া যায়নি।');
-        return;
-      }
-
-      if (!forceRegenerate) {
-        // 1. Check localStorage cache first (instant load)
-        const cached = loadCachedDiseaseGuide(indicationName);
-        if (cached) {
-          loadedGuideKeyRef.current = indicationKey;
-          setDiseaseGuide(cached);
-          setIsLoadingGuide(false);
-          return;
-        }
-
-        // 2. Check Description_BN column from the Google Sheet
-        const fromSheet = parseSheetDescriptionBn(
-          indicationName,
-          entry.indication.Description_BN
-        );
-        if (fromSheet) {
-          saveCachedDiseaseGuide(indicationName, fromSheet);
-          loadedGuideKeyRef.current = indicationKey;
-          setDiseaseGuide(fromSheet);
-          setIsLoadingGuide(false);
-          return;
-        }
-      }
-
-      // 3. Generate fresh structured pure-Bengali guide via server-side Gemini API (15s timeout)
-      const controller = new AbortController();
-      guideAbortRef.current = controller;
-      setIsLoadingGuide(true);
-      setDiseaseGuide(null);
-
-      try {
-        const ctx = matchedContextRef.current;
-        const freshGuide = await fetchDiseaseGuideFromServer(
-          {
-            indicationName,
-            category: entry.category,
-            specialists: entry.specialists,
-            keyGenerics: entry.generics,
-            therapeuticClasses: ctx.therapeuticClasses,
-            matchedBrands: ctx.matchedBrands,
-          },
-          controller.signal
-        );
-
-        if (requestSeq !== guideRequestSeqRef.current) return;
-        saveCachedDiseaseGuide(indicationName, freshGuide);
-        loadedGuideKeyRef.current = indicationKey;
-        setDiseaseGuide(freshGuide);
-        setGuideError(null);
-      } catch (err) {
-        if (requestSeq !== guideRequestSeqRef.current) return;
-        if (err instanceof Error && err.name === 'AbortError') return;
-        const msg =
-          err instanceof Error && err.message
-            ? err.message
-            : 'বাংলা ক্লিনিক্যাল গাইড তৈরি করা যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।';
-        loadedGuideKeyRef.current = null;
-        setGuideError(msg);
-      } finally {
-        if (requestSeq === guideRequestSeqRef.current) {
-          guideAbortRef.current = null;
-          setIsLoadingGuide(false);
-        }
-      }
-    },
-    []
-  );
-
-  // Reset drawer state when closing or switching indications
+  // Reset drawer state & hydrate any cached AI-enhanced guide when switching indications
   useEffect(() => {
+    guideRequestSeqRef.current += 1;
     setDrawerGenericFilter(null);
     setCopiedGuide(false);
-    if (!selectedIndicationId) {
-      guideRequestSeqRef.current += 1;
-      loadedGuideKeyRef.current = null;
-      if (guideAbortRef.current) {
-        guideAbortRef.current.abort();
-        guideAbortRef.current = null;
-      }
-      setDiseaseGuide(null);
-      setGuideError(null);
-      setIsLoadingGuide(false);
+    setIsEnhancingGuide(false);
+
+    if (!selectedEntry) {
+      setEnhancedGuide(null);
+      return;
     }
-  }, [selectedIndicationId]);
 
-  // Automatically load cached/sheet or generate Disease Guide ONLY when indication changes or Guide tab opens
-  useEffect(() => {
-    if (!selectedIndicationId || drawerTab !== 'guide') return;
-    const entry = selectedEntryRef.current;
-    if (!entry) return;
-    const expectedKey = String(entry.indication.Indication_Name ?? '')
-      .trim()
-      .toLowerCase()
-      .replace(/\s+/g, ' ');
-    if (loadedGuideKeyRef.current === expectedKey) return;
-    void loadOrGenerateDiseaseGuide(entry, false);
-  }, [selectedIndicationId, drawerTab, loadOrGenerateDiseaseGuide]);
+    const cached = loadCachedDiseaseGuide(selectedEntry.indication.Indication_Name);
+    if (cached && cached.source === 'ai') {
+      setEnhancedGuide(cached);
+    } else {
+      setEnhancedGuide(null);
+    }
+  }, [selectedEntry]);
 
-  // Cleanup in-flight request on unmount
+  // Cleanup in-flight enhancement sequence on unmount
   useEffect(() => {
     return () => {
       guideRequestSeqRef.current += 1;
-      if (guideAbortRef.current) {
-        guideAbortRef.current.abort();
-        guideAbortRef.current = null;
-      }
     };
   }, []);
+
+  // Optional client-side Gemini enhancement on রিফ্রেশ করুন (falls back silently to built-in Bengali guide, never shows error)
+  const handleRefreshDiseaseGuide = useCallback(async () => {
+    if (!selectedEntry) return;
+    const requestSeq = ++guideRequestSeqRef.current;
+    setCopiedGuide(false);
+
+    if (hasClientGeminiKey() && (typeof navigator === 'undefined' || navigator.onLine)) {
+      setIsEnhancingGuide(true);
+      const aiGuide = await enhanceDiseaseGuideWithClientGemini({
+        indicationName: selectedEntry.indication.Indication_Name,
+        category: selectedEntry.category,
+        specialists: selectedEntry.specialists,
+        keyGenerics: selectedEntry.generics,
+        matchedProducts: matchedProductsForDrawer,
+        matchedChapter: matchedKnowledgeChapter,
+      });
+
+      if (requestSeq !== guideRequestSeqRef.current) return;
+      setIsEnhancingGuide(false);
+
+      if (aiGuide) {
+        saveCachedDiseaseGuide(selectedEntry.indication.Indication_Name, aiGuide);
+        setEnhancedGuide(aiGuide);
+        pushToast({
+          type: 'success',
+          title: 'বাংলা গাইড হালনাগাদ হয়েছে',
+          message: `${selectedEntry.indication.Indication_Name} গাইড সফলভাবে সমৃদ্ধ করা হয়েছে।`,
+        });
+        return;
+      }
+    }
+
+    // Offline or no client Gemini key or API fallback: refresh from latest synced local data cleanly
+    setEnhancedGuide(null);
+    pushToast({
+      type: 'info',
+      title: 'ক্লিনিক্যাল গাইড হালনাগাদ সম্পন্ন',
+      message: `${selectedEntry.indication.Indication_Name} এর সর্বশেষ বাংলা রেফারেন্স দেখানো হচ্ছে।`,
+    });
+  }, [selectedEntry, matchedProductsForDrawer, matchedKnowledgeChapter, pushToast]);
 
   // Close open drawers on Escape key
   useEffect(() => {
@@ -536,15 +480,19 @@ export const IndicationsDirectoryView: React.FC<IndicationsDirectoryViewProps> =
   }, [selectedEntry, selectedDepartmentEntry, setSelectedSpecialistId]);
 
   const handleCopyGuide = async () => {
-    if (!diseaseGuide) return;
-    const formatted = formatDiseaseGuideForCopy(diseaseGuide);
+    if (!activeDiseaseGuide) return;
+    const formatted = formatEnhancedGuideForCopy(
+      activeDiseaseGuide,
+      matchedKnowledgeChapter,
+      matchedProductsForDrawer
+    );
     try {
       await navigator.clipboard.writeText(formatted);
       setCopiedGuide(true);
       pushToast({
         type: 'success',
         title: 'কপি সম্পন্ন হয়েছে',
-        message: `${diseaseGuide.indicationName} বাংলা গাইড ক্লিপবোর্ডে কপি করা হয়েছে।`,
+        message: `${activeDiseaseGuide.indicationName} বাংলা গাইড ক্লিপবোর্ডে কপি করা হয়েছে।`,
       });
       window.setTimeout(() => setCopiedGuide(false), 2500);
     } catch {
@@ -985,26 +933,26 @@ export const IndicationsDirectoryView: React.FC<IndicationsDirectoryViewProps> =
                 </button>
               </div>
 
-              {/* 3-Tab Switcher */}
-              <div className="px-4 sm:px-5 pb-3">
+              {/* 3-Tab Switcher — Zero truncation on 360px phones */}
+              <div className="px-3.5 sm:px-5 pb-3">
                 <div
                   role="tablist"
                   aria-label="Indication detail sections"
-                  className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10"
+                  className="flex items-center gap-1 p-1 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10"
                 >
                   <button
                     type="button"
                     role="tab"
                     aria-selected={drawerTab === 'guide'}
                     onClick={() => setDrawerTab('guide')}
-                    className={`min-h-[42px] sm:min-h-[38px] px-2 sm:px-2.5 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                    className={`flex-none sm:flex-1 min-h-[40px] sm:min-h-[38px] px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer ${
                       drawerTab === 'guide'
                         ? 'bg-[#0D2B45] dark:bg-[#0E7C7B] text-white'
                         : 'text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 hover:text-[#0D2B45] dark:hover:text-white'
                     }`}
                   >
-                    <FileText className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">বিস্তারিত</span>
+                    <FileText className="w-3.5 h-3.5 hidden sm:block shrink-0" />
+                    <span>বিস্তারিত</span>
                   </button>
 
                   <button
@@ -1012,22 +960,15 @@ export const IndicationsDirectoryView: React.FC<IndicationsDirectoryViewProps> =
                     role="tab"
                     aria-selected={drawerTab === 'specialists'}
                     onClick={() => setDrawerTab('specialists')}
-                    className={`min-h-[42px] sm:min-h-[38px] px-2 sm:px-2.5 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                    className={`flex-1 min-h-[40px] sm:min-h-[38px] px-1.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer ${
                       drawerTab === 'specialists'
                         ? 'bg-[#0D2B45] dark:bg-[#0E7C7B] text-white'
                         : 'text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 hover:text-[#0D2B45] dark:hover:text-white'
                     }`}
                   >
-                    <Layers className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">Specialists</span>
-                    <span
-                      className={`px-1.5 py-0.5 rounded text-[10px] font-mono tabular-nums shrink-0 ${
-                        drawerTab === 'specialists'
-                          ? 'bg-white/20 text-white'
-                          : 'bg-[#EBF4FA] dark:bg-[#133859] text-[#0D2B45]/70 dark:text-[#EBF4FA]/75'
-                      }`}
-                    >
-                      {selectedEntry.specialists.length}
+                    <Layers className="w-3.5 h-3.5 hidden sm:block shrink-0" />
+                    <span className="tabular-nums">
+                      Specialists ({selectedEntry.specialists.length})
                     </span>
                   </button>
 
@@ -1036,22 +977,15 @@ export const IndicationsDirectoryView: React.FC<IndicationsDirectoryViewProps> =
                     role="tab"
                     aria-selected={drawerTab === 'generics'}
                     onClick={() => setDrawerTab('generics')}
-                    className={`min-h-[42px] sm:min-h-[38px] px-2 sm:px-2.5 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                    className={`flex-1 min-h-[40px] sm:min-h-[38px] px-1.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer ${
                       drawerTab === 'generics'
                         ? 'bg-[#0D2B45] dark:bg-[#0E7C7B] text-white'
                         : 'text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 hover:text-[#0D2B45] dark:hover:text-white'
                     }`}
                   >
-                    <Pill className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">Generics</span>
-                    <span
-                      className={`px-1.5 py-0.5 rounded text-[10px] font-mono tabular-nums shrink-0 ${
-                        drawerTab === 'generics'
-                          ? 'bg-white/20 text-white'
-                          : 'bg-[#EBF4FA] dark:bg-[#133859] text-[#0D2B45]/70 dark:text-[#EBF4FA]/75'
-                      }`}
-                    >
-                      {matchedProductsForDrawer.length}
+                    <Pill className="w-3.5 h-3.5 hidden sm:block shrink-0" />
+                    <span className="tabular-nums">
+                      Generics ({matchedProductsForDrawer.length})
                     </span>
                   </button>
                 </div>
@@ -1061,24 +995,26 @@ export const IndicationsDirectoryView: React.FC<IndicationsDirectoryViewProps> =
             {/* Scrollable Drawer Content */}
             <div className="flex-1 overflow-y-auto px-4 sm:px-5 py-4 sm:py-5 pb-10 pb-safe space-y-4">
               {/* =========================================================== */}
-              {/* TAB 1: বিস্তারিত (DISEASE GUIDE) — PURE BENGALI             */}
+              {/* TAB 1: বিস্তারিত (DISEASE GUIDE) — INSTANT CLIENT BENGALI   */}
               {/* =========================================================== */}
-              {drawerTab === 'guide' && (
-                <div className="space-y-4">
-                  {/* Action Toolbar: Copy & Regenerate */}
+              {drawerTab === 'guide' && activeDiseaseGuide && (
+                <div className="space-y-3.5">
+                  {/* Action Toolbar: Copy & Refresh */}
                   <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 px-4 py-3">
                     <div className="min-w-0">
                       <div className="text-xs font-bold text-[#0D2B45] dark:text-white">
                         বিস্তারিত (Disease Guide)
                       </div>
                       <div className="text-[11px] text-[#0D2B45]/60 dark:text-[#EBF4FA]/60">
-                        {isLoadingGuide
-                          ? 'বাংলা ক্লিনিক্যাল গাইড তৈরি হচ্ছে...'
-                          : diseaseGuide?.source === 'sheet'
-                          ? 'Google Sheet (Description_BN) থেকে লোডকৃত'
-                          : diseaseGuide
-                          ? 'ডিভাইসে সংরক্ষিত · তাৎক্ষণিক অ্যাক্সেস'
-                          : 'বিশুদ্ধ বাংলায় সংক্ষিপ্ত ক্লিনিক্যাল নির্দেশিকা'}
+                        {isEnhancingGuide
+                          ? 'বাংলা ক্লিনিক্যাল গাইড হালনাগাদ হচ্ছে...'
+                          : activeDiseaseGuide.source === 'sheet'
+                          ? 'Google Sheet (Description_BN) · অফলাইন রেডি'
+                          : activeDiseaseGuide.source === 'ai'
+                          ? 'সংরক্ষিত সমৃদ্ধ বাংলা গাইড · অফলাইন রেডি'
+                          : matchedKnowledgeChapter
+                          ? `Medical Knowledge (${matchedKnowledgeChapter.Chapter_No}) + ক্লিনিক্যাল ডাটা`
+                          : 'ক্লিনিক্যাল রেফারেন্স · তাৎক্ষণিক অফলাইন অ্যাক্সেস'}
                       </div>
                     </div>
 
@@ -1086,8 +1022,7 @@ export const IndicationsDirectoryView: React.FC<IndicationsDirectoryViewProps> =
                       <button
                         type="button"
                         onClick={handleCopyGuide}
-                        disabled={!diseaseGuide || isLoadingGuide}
-                        className="min-h-[36px] px-3 py-1.5 rounded-xl bg-[#EBF4FA] hover:bg-[#dcecf7] dark:bg-[#133859] dark:hover:bg-[#1C4A73] disabled:opacity-45 text-[#0D2B45] dark:text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                        className="min-h-[36px] px-3 py-1.5 rounded-xl bg-[#EBF4FA] hover:bg-[#dcecf7] dark:bg-[#133859] dark:hover:bg-[#1C4A73] text-[#0D2B45] dark:text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
                       >
                         {copiedGuide ? (
                           <>
@@ -1097,252 +1032,335 @@ export const IndicationsDirectoryView: React.FC<IndicationsDirectoryViewProps> =
                         ) : (
                           <>
                             <Copy className="w-3.5 h-3.5" />
-                            <span>কপি করুন (Copy)</span>
+                            <span>কপি করুন</span>
                           </>
                         )}
                       </button>
 
                       <button
                         type="button"
-                        onClick={() => void loadOrGenerateDiseaseGuide(selectedEntry, true)}
-                        disabled={isLoadingGuide}
-                        className="min-h-[36px] px-3 py-1.5 rounded-xl bg-[#0D2B45] hover:bg-[#133859] dark:bg-[#0E7C7B] dark:hover:bg-[#149A99] disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
+                        onClick={() => void handleRefreshDiseaseGuide()}
+                        disabled={isEnhancingGuide}
+                        className="min-h-[36px] px-3 py-1.5 rounded-xl bg-[#0D2B45] hover:bg-[#133859] dark:bg-[#0E7C7B] dark:hover:bg-[#149A99] disabled:opacity-55 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
                       >
                         <RefreshCw
-                          className={`w-3.5 h-3.5 ${isLoadingGuide ? 'animate-spin' : ''}`}
+                          className={`w-3.5 h-3.5 ${isEnhancingGuide ? 'animate-spin' : ''}`}
                         />
                         <span>রিফ্রেশ করুন</span>
                       </button>
                     </div>
                   </div>
 
-                  {/* Loading Skeleton */}
-                  {isLoadingGuide && (
-                    <div className="space-y-3.5" aria-busy="true" aria-live="polite">
-                      <div className="rounded-2xl bg-[#EBF4FA]/75 dark:bg-[#0D2235] border border-[#0E7C7B]/25 px-4 py-3 text-xs font-medium text-[#0D2B45] dark:text-[#EBF4FA] flex items-center gap-2.5">
-                        <RefreshCw className="w-4 h-4 text-[#0E7C7B] dark:text-[#149A99] animate-spin shrink-0" />
-                        <span>
-                          &ldquo;{selectedEntry.indication.Indication_Name}&rdquo; এর বিশুদ্ধ বাংলা
-                          ক্লিনিক্যাল গাইড তৈরি হচ্ছে...
-                        </span>
+                  {/* Matched Medical Knowledge Chapter Card with 1-Tap Open */}
+                  {matchedKnowledgeChapter && (
+                    <section className="rounded-2xl bg-emerald-50/90 dark:bg-[#0A2935] border border-[#0E7C7B]/30 p-4 space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="px-2 py-0.5 rounded-md bg-[#0E7C7B] text-white text-[11px] font-mono font-bold shrink-0">
+                            {matchedKnowledgeChapter.Chapter_No}
+                          </span>
+                          <span className="text-[11px] font-semibold text-[#0E7C7B] dark:text-[#8EEAE8] truncate">
+                            Medical Knowledge অধ্যায় পাওয়া গেছে
+                          </span>
+                        </div>
+                        {matchedKnowledgeChapter.Read_Time && (
+                          <span className="text-[11px] text-[#0D2B45]/60 dark:text-[#EBF4FA]/65 shrink-0">
+                            {matchedKnowledgeChapter.Read_Time}
+                          </span>
+                        )}
                       </div>
 
-                      {[1, 2, 3, 4, 5].map((idx) => (
-                        <div
-                          key={`skel-${idx}`}
-                          className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-4 space-y-3 animate-pulse"
+                      <h3 className="text-sm sm:text-base font-display font-bold text-[#0D2B45] dark:text-white leading-snug">
+                        {matchedKnowledgeChapter.Title_BN}
+                      </h3>
+
+                      {matchedKnowledgeChapter.Short_Summary_BN && (
+                        <p className="text-xs sm:text-sm text-[#0D2B45]/85 dark:text-[#EBF4FA]/85 leading-relaxed">
+                          {matchedKnowledgeChapter.Short_Summary_BN}
+                        </p>
+                      )}
+
+                      {matchedKnowledgeChapter.Key_Takeaway_BN && (
+                        <div className="rounded-xl bg-white/85 dark:bg-[#071522]/75 border border-[#0E7C7B]/20 px-3 py-2 text-xs text-[#0D2B45]/85 dark:text-[#EBF4FA]/85 leading-relaxed">
+                          <span className="font-bold text-[#0E7C7B] dark:text-[#8EEAE8]">
+                            মূল বার্তা:{' '}
+                          </span>
+                          {matchedKnowledgeChapter.Key_Takeaway_BN}
+                        </div>
+                      )}
+
+                      <div className="pt-1 flex flex-wrap items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedIndicationId(null);
+                            openKnowledgeChapter(
+                              'medical_knowledge',
+                              matchedKnowledgeChapter.Chapter_No
+                            );
+                          }}
+                          className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-[#0E7C7B] hover:bg-[#0B6665] text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors cursor-pointer"
                         >
-                          <div className="flex items-center gap-2.5">
-                            <div className="w-6 h-6 rounded-lg bg-[#EBF4FA] dark:bg-[#133859]" />
-                            <div className="h-4 w-52 rounded bg-[#EBF4FA] dark:bg-[#133859]" />
-                          </div>
-                          <div className="space-y-2">
-                            <div className="h-3 w-full rounded bg-[#F4F8FC] dark:bg-[#0A1C2D]" />
-                            <div className="h-3 w-11/12 rounded bg-[#F4F8FC] dark:bg-[#0A1C2D]" />
-                            <div className="h-3 w-4/5 rounded bg-[#F4F8FC] dark:bg-[#0A1C2D]" />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                          <BookOpen className="w-3.5 h-3.5" />
+                          <span>সম্পূর্ণ অধ্যায় পড়ুন ({matchedKnowledgeChapter.Chapter_No})</span>
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </button>
+
+                        <WatchNowButton
+                          videoUrl={matchedKnowledgeChapter.Video_URL}
+                          fallbackUrl={matchedKnowledgeChapter.YouTube_URL}
+                          size="compact"
+                        />
+                      </div>
+                    </section>
                   )}
 
-                  {/* Error State */}
-                  {!isLoadingGuide && guideError && (
-                    <div className="rounded-2xl bg-rose-50/90 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/60 p-5 space-y-3">
-                      <div className="flex items-start gap-2.5">
-                        <AlertCircle className="w-5 h-5 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
-                        <div className="min-w-0">
-                          <h3 className="text-sm font-bold text-rose-900 dark:text-rose-100">
-                            বাংলা গাইড লোড করা সম্ভব হয়নি
-                          </h3>
-                          <p className="text-xs text-rose-800/85 dark:text-rose-200/80 mt-1 leading-relaxed">
-                            {guideError}
-                          </p>
+                  {/* Quick Clinical Snapshot: Specialists, Key Generics & Available DI Brands with Prices */}
+                  <section className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <h3 className="text-xs font-bold text-[#0D2B45] dark:text-white flex items-center gap-1.5">
+                        <Pill className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#149A99]" />
+                        <span>ড্রাগ ইন্টারন্যাশনাল (DI) ক্লিনিক্যাল রেফারেন্স</span>
+                      </h3>
+                      <span className="text-[11px] font-mono tabular-nums text-[#0E7C7B] dark:text-[#8EEAE8]">
+                        {matchedProductsForDrawer.length} DI SKU
+                      </span>
+                    </div>
+
+                    {/* Target Specialists & Key Generics Compact Rows */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+                      <div className="rounded-xl bg-[#F4F8FC] dark:bg-[#071522] p-2.5 space-y-1">
+                        <div className="text-[11px] font-bold text-[#0D2B45]/70 dark:text-[#EBF4FA]/70">
+                          টার্গেট স্পেশালিস্ট ({selectedEntry.specialists.length})
+                        </div>
+                        <div className="text-[#0D2B45] dark:text-white leading-relaxed">
+                          {selectedEntry.specialists.length > 0
+                            ? selectedEntry.specialists.slice(0, 5).join(', ') +
+                              (selectedEntry.specialists.length > 5
+                                ? ` (+${selectedEntry.specialists.length - 5})`
+                                : '')
+                            : 'সংশ্লিষ্ট চিকিৎসক বিভাগ'}
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => void loadOrGenerateDiseaseGuide(selectedEntry, true)}
-                        className="min-h-[38px] px-4 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                        <span>আবার চেষ্টা করুন (Retry)</span>
-                      </button>
-                    </div>
-                  )}
 
-                  {/* Generated / Cached 5 Structured Pure-Bengali Cards */}
-                  {!isLoadingGuide && !guideError && diseaseGuide && (
-                    <div className="space-y-3.5">
-                      {/* Bengali Title Banner */}
-                      {diseaseGuide.titleBn &&
-                        diseaseGuide.titleBn.toLowerCase() !==
-                          selectedEntry.indication.Indication_Name.toLowerCase() && (
-                          <div className="px-4 py-2.5 rounded-xl bg-[#EBF4FA]/70 dark:bg-[#0D2235] border border-[#0E7C7B]/20 text-sm font-bold text-[#0D2B45] dark:text-white">
-                            {diseaseGuide.titleBn}
+                      <div className="rounded-xl bg-[#F4F8FC] dark:bg-[#071522] p-2.5 space-y-1">
+                        <div className="text-[11px] font-bold text-[#0D2B45]/70 dark:text-[#EBF4FA]/70">
+                          মূল জেনেরিকসমূহ ({selectedEntry.generics.length})
+                        </div>
+                        <div className="text-[#0D2B45] dark:text-white leading-relaxed">
+                          {selectedEntry.generics.length > 0
+                            ? selectedEntry.generics.slice(0, 5).join(', ') +
+                              (selectedEntry.generics.length > 5
+                                ? ` (+${selectedEntry.generics.length - 5})`
+                                : '')
+                            : 'নির্ধারিত জেনেরিক নেই'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Available Drug International Brands with Prices */}
+                    {topMatchedBrandsForGuide.length > 0 && (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-bold text-[#0D2B45]/70 dark:text-[#EBF4FA]/70">
+                            উপলব্ধ DI ব্র্যান্ড ও মূল্য
+                          </span>
+                          {matchedProductsForDrawer.length > topMatchedBrandsForGuide.length && (
+                            <button
+                              type="button"
+                              onClick={() => setDrawerTab('generics')}
+                              className="text-[11px] font-semibold text-[#0E7C7B] dark:text-[#8EEAE8] hover:underline inline-flex items-center gap-0.5 cursor-pointer"
+                            >
+                              <span>সবগুলো দেখুন ({matchedProductsForDrawer.length})</span>
+                              <ChevronRight className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                          {topMatchedBrandsForGuide.map((prod) => {
+                            const brandName = prod.Brand_Name || prod.Product_Name;
+                            const priceLabel = formatProductPriceCompact(prod);
+                            return (
+                              <button
+                                key={`guide-brand-${prod.Product_ID}-${brandName}`}
+                                type="button"
+                                onClick={() => openProductBrief(prod.Product_ID)}
+                                className="text-left rounded-xl bg-[#F4F8FC] dark:bg-[#071522] hover:bg-[#EBF4FA] dark:hover:bg-[#102A42] border border-[#0D2B45]/8 dark:border-[#EBF4FA]/8 px-3 py-2 transition-colors cursor-pointer"
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-xs font-bold text-[#0D2B45] dark:text-white truncate">
+                                    {brandName} {prod.Strength}
+                                  </span>
+                                  {prod.Dosage_Form && (
+                                    <span className="text-[10px] font-medium text-[#0E7C7B] dark:text-[#8EEAE8] shrink-0">
+                                      {prod.Dosage_Form}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex items-center justify-between gap-2 mt-0.5">
+                                  <span className="text-[11px] text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 truncate">
+                                    {prod.Generic_Name}
+                                  </span>
+                                  {priceLabel && (
+                                    <span className="text-[10px] font-mono font-semibold text-[#0D2B45]/80 dark:text-[#EBF4FA]/80 whitespace-nowrap shrink-0">
+                                      {priceLabel}
+                                    </span>
+                                  )}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </section>
+
+                  {/* 5 Structured Pure-Bengali Clinical Cards */}
+                  <div className="space-y-3.5">
+                    {/* Card 1: রোগটি কী? (সংজ্ঞা / Overview) */}
+                    <section className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 border-l-4 border-l-[#0E7C7B] p-4 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className="w-6 h-6 rounded-lg bg-[#EBF4FA] dark:bg-[#0E7C7B]/25 text-[#0E7C7B] dark:text-[#8EEAE8] text-xs font-bold inline-flex items-center justify-center shrink-0">
+                          ১
+                        </span>
+                        <h3 className="text-sm font-bold text-[#0D2B45] dark:text-white">
+                          রোগটি কী?{' '}
+                          <span className="font-normal text-xs text-[#0D2B45]/60 dark:text-[#EBF4FA]/60">
+                            (সংজ্ঞা / Overview)
+                          </span>
+                        </h3>
+                      </div>
+                      <p className="text-sm text-[#0D2B45]/85 dark:text-[#EBF4FA]/85 leading-relaxed whitespace-pre-line">
+                        {activeDiseaseGuide.overview}
+                      </p>
+                    </section>
+
+                    {/* Card 2: প্রধান কারণ ও ঝুঁকির দিক (Causes & Risk Factors) */}
+                    {activeDiseaseGuide.causesAndRiskFactors.length > 0 && (
+                      <section className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-4 space-y-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="w-6 h-6 rounded-lg bg-[#EBF4FA] dark:bg-[#133859] text-[#0D2B45] dark:text-[#EBF4FA] text-xs font-bold inline-flex items-center justify-center shrink-0">
+                            ২
+                          </span>
+                          <h3 className="text-sm font-bold text-[#0D2B45] dark:text-white flex items-center gap-1.5 flex-wrap">
+                            <span>প্রধান কারণ ও ঝুঁকির দিক</span>
+                            <span className="font-normal text-xs text-[#0D2B45]/60 dark:text-[#EBF4FA]/60">
+                              (Causes &amp; Risk Factors)
+                            </span>
+                          </h3>
+                        </div>
+                        <ul className="space-y-1.5 text-sm text-[#0D2B45]/85 dark:text-[#EBF4FA]/85 leading-relaxed">
+                          {activeDiseaseGuide.causesAndRiskFactors.map((item, idx) => (
+                            <li key={`cause-${idx}`} className="flex items-start gap-2">
+                              <span
+                                aria-hidden="true"
+                                className="w-1.5 h-1.5 rounded-full bg-[#0E7C7B] dark:bg-[#149A99] mt-2 shrink-0"
+                              />
+                              <span>{item}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </section>
+                    )}
+
+                    {/* Card 3: মূল লক্ষণসমূহ (Key Symptoms) */}
+                    {activeDiseaseGuide.keySymptoms.length > 0 && (
+                      <section className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-4 space-y-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="w-6 h-6 rounded-lg bg-[#EBF4FA] dark:bg-[#133859] text-[#0D2B45] dark:text-[#EBF4FA] text-xs font-bold inline-flex items-center justify-center shrink-0">
+                            ৩
+                          </span>
+                          <h3 className="text-sm font-bold text-[#0D2B45] dark:text-white flex items-center gap-1.5 flex-wrap">
+                            <HeartPulse className="w-4 h-4 text-[#0E7C7B] dark:text-[#149A99]" />
+                            <span>মূল লক্ষণসমূহ</span>
+                            <span className="font-normal text-xs text-[#0D2B45]/60 dark:text-[#EBF4FA]/60">
+                              (Key Symptoms)
+                            </span>
+                          </h3>
+                        </div>
+                        <ul className="space-y-1.5 text-sm text-[#0D2B45]/85 dark:text-[#EBF4FA]/85 leading-relaxed">
+                          {activeDiseaseGuide.keySymptoms.map((item, idx) => (
+                            <li key={`sym-${idx}`} className="flex items-start gap-2">
+                              <span
+                                aria-hidden="true"
+                                className="w-1.5 h-1.5 rounded-full bg-[#0E7C7B] dark:bg-[#149A99] mt-2 shrink-0"
+                              />
+                              <span>{item}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </section>
+                    )}
+
+                    {/* Card 4: প্রাথমিক করণীয়, প্রতিকার ও চিকিৎসা নীতি (Management & Prevention) */}
+                    {(activeDiseaseGuide.managementAndPrevention.length > 0 ||
+                      activeDiseaseGuide.specialistWarning) && (
+                      <section className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-4 space-y-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="w-6 h-6 rounded-lg bg-[#EBF4FA] dark:bg-[#133859] text-[#0D2B45] dark:text-[#EBF4FA] text-xs font-bold inline-flex items-center justify-center shrink-0">
+                            ৪
+                          </span>
+                          <h3 className="text-sm font-bold text-[#0D2B45] dark:text-white flex items-center gap-1.5 flex-wrap">
+                            <ShieldAlert className="w-4 h-4 text-[#0E7C7B] dark:text-[#149A99]" />
+                            <span>প্রাথমিক করণীয়, প্রতিকার ও চিকিৎসা নীতি</span>
+                            <span className="font-normal text-xs text-[#0D2B45]/60 dark:text-[#EBF4FA]/60">
+                              (Management &amp; Prevention)
+                            </span>
+                          </h3>
+                        </div>
+                        <ul className="space-y-1.5 text-sm text-[#0D2B45]/85 dark:text-[#EBF4FA]/85 leading-relaxed">
+                          {activeDiseaseGuide.managementAndPrevention.map((item, idx) => (
+                            <li key={`mgmt-${idx}`} className="flex items-start gap-2">
+                              <span
+                                aria-hidden="true"
+                                className="w-1.5 h-1.5 rounded-full bg-[#0E7C7B] dark:bg-[#149A99] mt-2 shrink-0"
+                              />
+                              <span>{item}</span>
+                            </li>
+                          ))}
+                        </ul>
+
+                        {activeDiseaseGuide.specialistWarning && (
+                          <div className="mt-2 rounded-xl bg-amber-50/90 dark:bg-amber-950/35 border border-amber-200 dark:border-amber-700/50 px-3.5 py-2.5 flex items-start gap-2 text-xs text-amber-950 dark:text-amber-200 leading-relaxed">
+                            <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                            <div>
+                              <span className="font-bold">বিশেষজ্ঞ পরামর্শ: </span>
+                              <span>{activeDiseaseGuide.specialistWarning}</span>
+                            </div>
                           </div>
                         )}
+                      </section>
+                    )}
 
-                      {/* Plain-text Description_BN fallback from Google Sheet */}
-                      {diseaseGuide.rawSheetText &&
-                      diseaseGuide.causesAndRiskFactors.length === 0 &&
-                      diseaseGuide.keySymptoms.length === 0 ? (
-                        <section className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-4 space-y-2.5">
-                          <div className="flex items-center gap-2">
-                            <span className="w-6 h-6 rounded-lg bg-[#EBF4FA] dark:bg-[#0E7C7B]/20 text-[#0E7C7B] dark:text-[#8EEAE8] text-xs font-bold inline-flex items-center justify-center">
-                              ১
+                    {/* Card 5: MPO ডিটেইলিং ফোকাস (Clinical Discussion Point) */}
+                    {activeDiseaseGuide.mpoDetailingFocus.length > 0 && (
+                      <section className="rounded-2xl bg-[#0D2B45] dark:bg-[#0A293B] text-white border border-[#0E7C7B]/40 p-4 space-y-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="w-6 h-6 rounded-lg bg-[#0E7C7B] text-white text-xs font-bold inline-flex items-center justify-center shrink-0">
+                            ৫
+                          </span>
+                          <h3 className="text-sm font-bold text-white flex items-center gap-1.5 flex-wrap">
+                            <Stethoscope className="w-4 h-4 text-[#7CE0DF]" />
+                            <span>MPO ডিটেইলিং ফোকাস</span>
+                            <span className="font-normal text-xs text-[#EBF4FA]/75">
+                              (Clinical Discussion Point)
                             </span>
-                            <h3 className="text-sm font-bold text-[#0D2B45] dark:text-white">
-                              রোগটি কী? (সংজ্ঞা ও বিবরণ)
-                            </h3>
-                          </div>
-                          <p className="text-sm text-[#0D2B45]/85 dark:text-[#EBF4FA]/85 leading-relaxed whitespace-pre-line">
-                            {diseaseGuide.rawSheetText}
-                          </p>
-                          <p className="text-[11px] text-[#0D2B45]/55 dark:text-[#EBF4FA]/55 pt-1">
-                            ৫টি পূর্ণাঙ্গ স্ট্রাকচার্ড সেকশন দেখতে উপরের &ldquo;রিফ্রেশ করুন&rdquo; বাটনে ক্লিক করুন।
-                          </p>
-                        </section>
-                      ) : (
-                        <>
-                          {/* Card 1: রোগটি কী? (সংজ্ঞা / Overview) */}
-                          <section className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 border-l-4 border-l-[#0E7C7B] p-4 space-y-2">
-                            <div className="flex items-center gap-2">
-                              <span className="w-6 h-6 rounded-lg bg-[#EBF4FA] dark:bg-[#0E7C7B]/25 text-[#0E7C7B] dark:text-[#8EEAE8] text-xs font-bold inline-flex items-center justify-center shrink-0">
-                                ১
-                              </span>
-                              <h3 className="text-sm font-bold text-[#0D2B45] dark:text-white">
-                                রোগটি কী?{' '}
-                                <span className="font-normal text-xs text-[#0D2B45]/60 dark:text-[#EBF4FA]/60">
-                                  (সংজ্ঞা / Overview)
-                                </span>
-                              </h3>
-                            </div>
-                            <p className="text-sm text-[#0D2B45]/85 dark:text-[#EBF4FA]/85 leading-relaxed">
-                              {diseaseGuide.overview}
-                            </p>
-                          </section>
-
-                          {/* Card 2: প্রধান কারণ ও ঝুঁকির দিক (Causes & Risk Factors) */}
-                          <section className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-4 space-y-2.5">
-                            <div className="flex items-center gap-2">
-                              <span className="w-6 h-6 rounded-lg bg-[#EBF4FA] dark:bg-[#133859] text-[#0D2B45] dark:text-[#EBF4FA] text-xs font-bold inline-flex items-center justify-center shrink-0">
-                                ২
-                              </span>
-                              <h3 className="text-sm font-bold text-[#0D2B45] dark:text-white flex items-center gap-1.5 flex-wrap">
-                                <span>প্রধান কারণ ও ঝুঁকির দিক</span>
-                                <span className="font-normal text-xs text-[#0D2B45]/60 dark:text-[#EBF4FA]/60">
-                                  (Causes &amp; Risk Factors)
-                                </span>
-                              </h3>
-                            </div>
-                            <ul className="space-y-1.5 text-sm text-[#0D2B45]/85 dark:text-[#EBF4FA]/85 leading-relaxed">
-                              {diseaseGuide.causesAndRiskFactors.map((item, idx) => (
-                                <li key={`cause-${idx}`} className="flex items-start gap-2">
-                                  <span
-                                    aria-hidden="true"
-                                    className="w-1.5 h-1.5 rounded-full bg-[#0E7C7B] dark:bg-[#149A99] mt-2 shrink-0"
-                                  />
-                                  <span>{item}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          </section>
-
-                          {/* Card 3: মূল লক্ষণসমূহ (Key Symptoms) */}
-                          <section className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-4 space-y-2.5">
-                            <div className="flex items-center gap-2">
-                              <span className="w-6 h-6 rounded-lg bg-[#EBF4FA] dark:bg-[#133859] text-[#0D2B45] dark:text-[#EBF4FA] text-xs font-bold inline-flex items-center justify-center shrink-0">
-                                ৩
-                              </span>
-                              <h3 className="text-sm font-bold text-[#0D2B45] dark:text-white flex items-center gap-1.5 flex-wrap">
-                                <HeartPulse className="w-4 h-4 text-[#0E7C7B] dark:text-[#149A99]" />
-                                <span>মূল লক্ষণসমূহ</span>
-                                <span className="font-normal text-xs text-[#0D2B45]/60 dark:text-[#EBF4FA]/60">
-                                  (Key Symptoms)
-                                </span>
-                              </h3>
-                            </div>
-                            <ul className="space-y-1.5 text-sm text-[#0D2B45]/85 dark:text-[#EBF4FA]/85 leading-relaxed">
-                              {diseaseGuide.keySymptoms.map((item, idx) => (
-                                <li key={`sym-${idx}`} className="flex items-start gap-2">
-                                  <span
-                                    aria-hidden="true"
-                                    className="w-1.5 h-1.5 rounded-full bg-[#0E7C7B] dark:bg-[#149A99] mt-2 shrink-0"
-                                  />
-                                  <span>{item}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          </section>
-
-                          {/* Card 4: প্রাথমিক করণীয়, প্রতিকার ও চিকিৎসা নীতি (Management & Prevention) */}
-                          <section className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-4 space-y-2.5">
-                            <div className="flex items-center gap-2">
-                              <span className="w-6 h-6 rounded-lg bg-[#EBF4FA] dark:bg-[#133859] text-[#0D2B45] dark:text-[#EBF4FA] text-xs font-bold inline-flex items-center justify-center shrink-0">
-                                ৪
-                              </span>
-                              <h3 className="text-sm font-bold text-[#0D2B45] dark:text-white flex items-center gap-1.5 flex-wrap">
-                                <ShieldAlert className="w-4 h-4 text-[#0E7C7B] dark:text-[#149A99]" />
-                                <span>প্রাথমিক করণীয়, প্রতিকার ও চিকিৎসা নীতি</span>
-                                <span className="font-normal text-xs text-[#0D2B45]/60 dark:text-[#EBF4FA]/60">
-                                  (Management &amp; Prevention)
-                                </span>
-                              </h3>
-                            </div>
-                            <ul className="space-y-1.5 text-sm text-[#0D2B45]/85 dark:text-[#EBF4FA]/85 leading-relaxed">
-                              {diseaseGuide.managementAndPrevention.map((item, idx) => (
-                                <li key={`mgmt-${idx}`} className="flex items-start gap-2">
-                                  <span
-                                    aria-hidden="true"
-                                    className="w-1.5 h-1.5 rounded-full bg-[#0E7C7B] dark:bg-[#149A99] mt-2 shrink-0"
-                                  />
-                                  <span>{item}</span>
-                                </li>
-                              ))}
-                            </ul>
-
-                            {diseaseGuide.specialistWarning && (
-                              <div className="mt-2 rounded-xl bg-amber-50/90 dark:bg-amber-950/35 border border-amber-200 dark:border-amber-700/50 px-3.5 py-2.5 flex items-start gap-2 text-xs text-amber-950 dark:text-amber-200 leading-relaxed">
-                                <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                                <div>
-                                  <span className="font-bold">বিশেষজ্ঞ পরামর্শ: </span>
-                                  <span>{diseaseGuide.specialistWarning}</span>
-                                </div>
-                              </div>
-                            )}
-                          </section>
-
-                          {/* Card 5: MPO ডিটেইলিং ফোকাস (Clinical Discussion Point) */}
-                          <section className="rounded-2xl bg-[#0D2B45] dark:bg-[#0A293B] text-white border border-[#0E7C7B]/40 p-4 space-y-2.5">
-                            <div className="flex items-center gap-2">
-                              <span className="w-6 h-6 rounded-lg bg-[#0E7C7B] text-white text-xs font-bold inline-flex items-center justify-center shrink-0">
-                                ৫
-                              </span>
-                              <h3 className="text-sm font-bold text-white flex items-center gap-1.5 flex-wrap">
-                                <Stethoscope className="w-4 h-4 text-[#7CE0DF]" />
-                                <span>MPO ডিটেইলিং ফোকাস</span>
-                                <span className="font-normal text-xs text-[#EBF4FA]/75">
-                                  (Clinical Discussion Point)
-                                </span>
-                              </h3>
-                            </div>
-                            <ul className="space-y-2 text-sm text-[#EBF4FA]/95 leading-relaxed">
-                              {diseaseGuide.mpoDetailingFocus.map((item, idx) => (
-                                <li key={`mpo-${idx}`} className="flex items-start gap-2">
-                                  <span
-                                    aria-hidden="true"
-                                    className="w-1.5 h-1.5 rounded-full bg-[#7CE0DF] mt-2 shrink-0"
-                                  />
-                                  <span>{item}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          </section>
-                        </>
-                      )}
-                    </div>
-                  )}
+                          </h3>
+                        </div>
+                        <ul className="space-y-2 text-sm text-[#EBF4FA]/95 leading-relaxed">
+                          {activeDiseaseGuide.mpoDetailingFocus.map((item, idx) => (
+                            <li key={`mpo-${idx}`} className="flex items-start gap-2">
+                              <span
+                                aria-hidden="true"
+                                className="w-1.5 h-1.5 rounded-full bg-[#7CE0DF] mt-2 shrink-0"
+                              />
+                              <span>{item}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </section>
+                    )}
+                  </div>
                 </div>
               )}
 

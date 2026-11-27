@@ -181,7 +181,15 @@ async function copyTextSafe(text: string): Promise<boolean> {
 }
 
 export const KnowledgeHubView: React.FC = () => {
-  const { dataset, refreshFromServer, isLoadingData, isOnline, isApiConfigured } = useApp();
+  const {
+    dataset,
+    refreshFromServer,
+    isLoadingData,
+    isOnline,
+    isApiConfigured,
+    pendingKnowledgeChapter,
+    setPendingKnowledgeChapter,
+  } = useApp();
 
   const [activeSubTab, setActiveSubTab] = useState<KnowledgeTabKey>('mpo_desk');
   const [searchQuery, setSearchQuery] = useState('');
@@ -212,6 +220,32 @@ export const KnowledgeHubView: React.FC = () => {
 
   const activeChapters =
     activeSubTab === 'mpo_desk' ? mpoDeskChapters : medicalKnowledgeChapters;
+
+  // Handle 1-tap deep-link handoff from Indications -> বিস্তারিত (Disease Guide)
+  useEffect(() => {
+    if (!pendingKnowledgeChapter) return;
+    const { tab, chapterNo } = pendingKnowledgeChapter;
+    setActiveSubTab(tab);
+    setSelectedCategory('');
+    setSearchQuery('');
+
+    const targetList = tab === 'mpo_desk' ? mpoDeskChapters : medicalKnowledgeChapters;
+    const normTarget = chapterNo.trim().toLowerCase();
+    const matched = targetList.find(
+      (ch) => String(ch.Chapter_No ?? '').trim().toLowerCase() === normTarget
+    );
+    if (matched) {
+      setSelectedChapter(matched);
+      setPendingKnowledgeChapter(null);
+    } else if (targetList.length > 0) {
+      setPendingKnowledgeChapter(null);
+    }
+  }, [
+    pendingKnowledgeChapter,
+    mpoDeskChapters,
+    medicalKnowledgeChapters,
+    setPendingKnowledgeChapter,
+  ]);
 
   // Reset category filter & close dropdown when switching between MPO Desk and Medical Knowledge
   useEffect(() => {
