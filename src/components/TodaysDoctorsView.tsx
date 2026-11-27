@@ -18,6 +18,7 @@ import {
   getDoctorType,
   getTodayWeekdayInfo,
 } from '../services/api';
+import { DoctorType } from '../types';
 
 export const TodaysDoctorsView: React.FC = () => {
   const {
@@ -35,6 +36,7 @@ export const TodaysDoctorsView: React.FC = () => {
 
   const [selectedSubArea, setSelectedSubArea] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
+  const [doctorTypeFilter, setDoctorTypeFilter] = useState<'' | DoctorType>('');
 
   const todayInfo = useMemo(() => getTodayWeekdayInfo(), []);
 
@@ -73,8 +75,9 @@ export const TodaysDoctorsView: React.FC = () => {
       .map(([name, count]) => ({ name, count }));
   }, [todaysDoctors, areaMap]);
 
-  const filteredDoctors = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
+  const subAreaScopedDoctors = useMemo(() => {
+    if (selectedSubArea === 'ALL') return todaysDoctors;
+    const target = selectedSubArea.toLowerCase();
     return todaysDoctors.filter((doc) => {
       const subArea = (
         doc.Sub_Area ||
@@ -82,12 +85,34 @@ export const TodaysDoctorsView: React.FC = () => {
         areaMap.get(doc.Area_ID)?.Area_Name ||
         ''
       ).trim();
+      return subArea.toLowerCase() === target;
+    });
+  }, [todaysDoctors, selectedSubArea, areaMap]);
 
-      if (selectedSubArea !== 'ALL' && subArea.toLowerCase() !== selectedSubArea.toLowerCase()) {
+  const doctorTypeCounts = useMemo(() => {
+    let regular = 0;
+    let guest = 0;
+    for (const doc of subAreaScopedDoctors) {
+      if (getDoctorType(doc) === 'Guest') guest += 1;
+      else regular += 1;
+    }
+    return { all: subAreaScopedDoctors.length, regular, guest };
+  }, [subAreaScopedDoctors]);
+
+  const filteredDoctors = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return subAreaScopedDoctors.filter((doc) => {
+      if (doctorTypeFilter && getDoctorType(doc) !== doctorTypeFilter) {
         return false;
       }
 
       if (!q) return true;
+      const subArea = (
+        doc.Sub_Area ||
+        doc.areaName ||
+        areaMap.get(doc.Area_ID)?.Area_Name ||
+        ''
+      ).trim();
       const hospitalName = String(
         hospitalMap.get(doc.Primary_Hospital_ID)?.Hospital_Name ?? ''
       ).toLowerCase();
@@ -106,7 +131,15 @@ export const TodaysDoctorsView: React.FC = () => {
         String(doc.Phone ?? '').toLowerCase().includes(q)
       );
     });
-  }, [todaysDoctors, selectedSubArea, searchQuery, areaMap, hospitalMap, departmentMap, dataset.Chambers]);
+  }, [
+    subAreaScopedDoctors,
+    doctorTypeFilter,
+    searchQuery,
+    areaMap,
+    hospitalMap,
+    departmentMap,
+    dataset.Chambers,
+  ]);
 
   return (
     <div className="min-h-[100dvh] bg-[#F4F8FC] dark:bg-[#071522] flex flex-col">
@@ -193,31 +226,85 @@ export const TodaysDoctorsView: React.FC = () => {
 
       {/* Main List Body */}
       <div className="flex-1 max-w-4xl mx-auto w-full px-3.5 sm:px-5 py-3.5 pb-10 pb-safe space-y-3">
-        {/* Compact Search Box */}
+        {/* Compact Search Box + 3-Button Segmented Filter Bar (সব / নিয়মিত / গেস্ট) */}
         {todaysDoctors.length > 0 && (
-          <div className="relative">
-            <Search
-              aria-hidden="true"
-              className="w-4 h-4 text-[#0D2B45]/45 dark:text-[#EBF4FA]/45 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-            />
-            <input
-              type="search"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="ডাক্তার, স্পেশালিটি বা হাসপাতাল খুঁজুন..."
-              aria-label="Search today's doctors"
-              className="w-full min-h-[42px] pl-9 pr-9 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-sm text-[#0D2B45] dark:text-white placeholder:text-[#0D2B45]/45 dark:placeholder:text-[#EBF4FA]/45 focus:outline-none focus:border-[#0E7C7B]"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => setSearchQuery('')}
-                aria-label="Clear search"
-                className="absolute right-1 top-1/2 -translate-y-1/2 min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-[#0D2B45]/50 hover:text-[#0D2B45] dark:text-[#EBF4FA]/50 dark:hover:text-white cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            )}
+          <div className="space-y-2.5">
+            <div className="relative">
+              <Search
+                aria-hidden="true"
+                className="w-4 h-4 text-[#0D2B45]/45 dark:text-[#EBF4FA]/45 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+              />
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="ডাক্তার, স্পেশালিটি বা হাসপাতাল খুঁজুন..."
+                aria-label="Search today's doctors"
+                className="w-full min-h-[42px] pl-9 pr-9 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-sm text-[#0D2B45] dark:text-white placeholder:text-[#0D2B45]/45 dark:placeholder:text-[#EBF4FA]/45 focus:outline-none focus:border-[#0E7C7B]"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  aria-label="Clear search"
+                  className="absolute right-1 top-1/2 -translate-y-1/2 min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-[#0D2B45]/50 hover:text-[#0D2B45] dark:text-[#EBF4FA]/50 dark:hover:text-white cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+
+            <div
+              role="group"
+              aria-label="Filter today's doctors by type"
+              className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10"
+            >
+              {(
+                [
+                  {
+                    value: '',
+                    label: 'সব',
+                    ariaLabel: `সব (All) — ${doctorTypeCounts.all}`,
+                    count: doctorTypeCounts.all,
+                  },
+                  {
+                    value: 'Regular',
+                    label: 'নিয়মিত',
+                    ariaLabel: `নিয়মিত (Regular) — ${doctorTypeCounts.regular}`,
+                    count: doctorTypeCounts.regular,
+                  },
+                  {
+                    value: 'Guest',
+                    label: 'গেস্ট',
+                    ariaLabel: `গেস্ট (Guest) — ${doctorTypeCounts.guest}`,
+                    count: doctorTypeCounts.guest,
+                  },
+                ] as const
+              ).map((opt) => {
+                const active = doctorTypeFilter === opt.value;
+                return (
+                  <button
+                    key={opt.value || 'all'}
+                    type="button"
+                    aria-pressed={active}
+                    aria-label={opt.ariaLabel}
+                    onClick={() => setDoctorTypeFilter(opt.value)}
+                    className={`min-h-[36px] px-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap truncate cursor-pointer ${
+                      active
+                        ? opt.value === 'Guest'
+                          ? 'bg-amber-600 text-white'
+                          : 'bg-[#0D2B45] dark:bg-[#0E7C7B] text-white'
+                        : 'text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 hover:bg-[#F4F8FC] dark:hover:bg-[#071522]'
+                    }`}
+                  >
+                    {opt.label}{' '}
+                    <span className="font-mono tabular-nums text-[11px] opacity-85">
+                      ({opt.count})
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -254,6 +341,7 @@ export const TodaysDoctorsView: React.FC = () => {
               onClick={() => {
                 setSelectedSubArea('ALL');
                 setSearchQuery('');
+                setDoctorTypeFilter('');
               }}
               className="min-h-[38px] px-4 rounded-xl bg-[#0E7C7B] text-white text-xs font-semibold cursor-pointer"
             >
