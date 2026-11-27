@@ -57,7 +57,8 @@ type FieldType =
   | 'doctor-specialist'
   | 'doctor-type'
   | 'visiting-days'
-  | 'visiting-time';
+  | 'visiting-time'
+  | 'sub-area';
 
 interface FieldSpec {
   name: string;
@@ -98,7 +99,13 @@ const SHEET_META: Record<
         placeholder: 'e.g., Dhaka Medical College Hospital',
         fullWidth: true,
       },
-      { name: 'Area_ID', label: 'Area_ID', type: 'ref', refSheet: 'Areas', required: true },
+      {
+        name: 'Sub_Area',
+        label: 'Sub-Area / Market',
+        type: 'sub-area',
+        required: true,
+        fullWidth: true,
+      },
       {
         name: 'Hospital_Type',
         label: 'Hospital_Type',
@@ -160,7 +167,12 @@ const SHEET_META: Record<
         refSheet: 'Hospitals',
         required: true,
       },
-      { name: 'Area_ID', label: 'Area', type: 'ref', refSheet: 'Areas', required: true },
+      {
+        name: 'Sub_Area',
+        label: 'Sub-Area / Market',
+        type: 'sub-area',
+        required: true,
+      },
       { name: 'Phone', label: 'Phone', type: 'tel', placeholder: '+880 1XXX-XXXXXX' },
       {
         name: 'Doctor_Type',
@@ -623,6 +635,9 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
   const {
     dataset,
     teamSession,
+    effectiveTeamId,
+    teamSubAreas,
+    saveSubArea,
     activeMpoId,
     activeMpo,
     doctorMap,
@@ -638,6 +653,11 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const [productPickerSearch, setProductPickerSearch] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  // Inline "+ Add Area" state for Doctors / Hospitals required Sub-Area dropdown
+  const [showInlineSubArea, setShowInlineSubArea] = useState(false);
+  const [inlineSubAreaName, setInlineSubAreaName] = useState('');
+  const [savingInlineSubArea, setSavingInlineSubArea] = useState(false);
 
   // Specialized Doctor form state
   const [degreeText, setDegreeText] = useState<string>('');
@@ -702,6 +722,12 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
             existingVal = matchedDept.Department_ID;
           }
         }
+        if (
+          (existingVal === undefined || existingVal === null || String(existingVal) === '') &&
+          field.name === 'Sub_Area'
+        ) {
+          existingVal = initialRecord.areaName;
+        }
         if (existingVal !== undefined && existingVal !== null && String(existingVal) !== '') {
           // Canonicalize Specialist name if matching one of MEDICAL_SPECIALTIES
           if (sheet === 'Doctor_Product_Detailing' && field.name === 'Specialist') {
@@ -732,7 +758,9 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
         defaults[field.name] = activeMpoId || dataset.MPO_Users[0]?.MPO_ID || '';
       } else if (field.name === 'Area_ID' && field.type === 'ref') {
         defaults[field.name] =
-          teamSession?.areaId || activeMpo?.Area_ID || dataset.Areas[0]?.Area_ID || '';
+          effectiveTeamId || teamSession?.areaId || activeMpo?.Area_ID || dataset.Areas[0]?.Area_ID || '';
+      } else if (field.name === 'Sub_Area') {
+        defaults[field.name] = teamSubAreas[0]?.Area_Name || '';
       } else if (field.type === 'date') {
         defaults[field.name] =
           field.name === 'Next_Follow_Up' ? addDaysToDate(today, 7) : today;
@@ -751,6 +779,8 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
 
     setFormValues(defaults);
     setProductPickerSearch('');
+    setShowInlineSubArea(false);
+    setInlineSubAreaName('');
 
     // Initialize Doctors specialized controls
     if (sheet === 'Doctors') {
@@ -1039,6 +1069,10 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
         if (hosp?.Area_ID && (!prev.Area_ID || !isEdit)) {
           next.Area_ID = hosp.Area_ID;
         }
+        const hospSubArea = hosp?.Sub_Area || hosp?.areaName;
+        if (hospSubArea && !prev.Sub_Area) {
+          next.Sub_Area = hospSubArea;
+        }
       }
       if (sheet === 'Chambers' && fieldName === 'Doctor_ID') {
         const doc = doctorMap.get(value);
@@ -1161,6 +1195,15 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
       }
     }
 
+    if ((sheet === 'Doctors' || sheet === 'Hospitals') && !(formValues.Sub_Area ?? '').trim()) {
+      pushToast({
+        type: 'warning',
+        title: 'Select a Sub-Area',
+        message: 'Choose a Sub-Area / Market or tap "+ Add Area" to create one.',
+      });
+      return;
+    }
+
     let resolvedDoctorDeptId = (formValues.Department_ID ?? '').trim();
     if (sheet === 'Doctors') {
       if (!degreeText.trim()) {
@@ -1223,6 +1266,16 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
         payload[field.name] = (formValues[field.name] ?? '').trim();
       }
     });
+
+    if (sheet === 'Doctors' || sheet === 'Hospitals') {
+      const subAreaClean = String(payload.Sub_Area ?? formValues.Sub_Area ?? '').trim();
+      payload.Sub_Area = subAreaClean;
+      payload.areaName = subAreaClean;
+      payload.Area_ID =
+        effectiveTeamId ||
+        teamSession?.areaId ||
+        String(initialRecord?.Area_ID ?? dataset.Areas[0]?.Area_ID ?? '');
+    }
 
     if (sheet === 'Doctors') {
       const selectedDeptId = String(payload.Department_ID ?? '').trim();
@@ -2047,6 +2100,103 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
                     <p className="text-[11px] text-[#0D2B45]/55 dark:text-[#EBF4FA]/55">
                       Automatically synced with the linked Hospital Chamber record in the Chambers sheet.
                     </p>
+                  </div>
+                );
+              }
+
+              if (field.type === 'sub-area') {
+                const subAreaOptions = teamSubAreas.map((sa) => sa.Area_Name);
+                const hasCurrentValue =
+                  Boolean(value) &&
+                  !subAreaOptions.some((opt) => opt.toLowerCase() === value.toLowerCase());
+
+                const handleCreateInlineSubArea = async () => {
+                  const trimmed = inlineSubAreaName.trim();
+                  if (!trimmed) return;
+                  setSavingInlineSubArea(true);
+                  try {
+                    const res = await saveSubArea({ Area_Name: trimmed });
+                    if (res.ok && res.subArea) {
+                      handleFieldChange('Sub_Area', res.subArea.Area_Name);
+                      setInlineSubAreaName('');
+                      setShowInlineSubArea(false);
+                    } else if (res.error) {
+                      pushToast({
+                        type: 'error',
+                        title: 'Could not add Sub-Area',
+                        message: res.error,
+                      });
+                    }
+                  } finally {
+                    setSavingInlineSubArea(false);
+                  }
+                };
+
+                return (
+                  <div key={field.name} className={field.fullWidth ? 'sm:col-span-2' : ''}>
+                    <div className="flex items-center justify-between gap-2 mb-1.5">
+                      <label
+                        htmlFor={inputId}
+                        className="text-xs font-semibold text-[#0D2B45] dark:text-[#EBF4FA] font-mono"
+                      >
+                        {field.label} {field.required ? '*' : ''}
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setShowInlineSubArea((prev) => !prev)}
+                        className="text-[11px] font-bold text-[#0E7C7B] dark:text-[#22E3D0] hover:underline inline-flex items-center gap-0.5 cursor-pointer"
+                      >
+                        <Plus className="w-3 h-3" />
+                        <span>{showInlineSubArea ? 'Close' : 'Add Area'}</span>
+                      </button>
+                    </div>
+
+                    <select
+                      id={inputId}
+                      value={value}
+                      onChange={(e) => handleFieldChange('Sub_Area', e.target.value)}
+                      required={field.required}
+                      className="w-full h-11 px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+                    >
+                      <option value="">
+                        {subAreaOptions.length === 0
+                          ? 'No Sub-Areas yet — tap "+ Add Area"'
+                          : 'Select Sub-Area / Market *'}
+                      </option>
+                      {hasCurrentValue && <option value={value}>{value}</option>}
+                      {subAreaOptions.map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+
+                    {showInlineSubArea && (
+                      <div className="mt-2 p-2.5 rounded-xl bg-[#EBF4FA]/70 dark:bg-[#0A1D30] border border-[#0E7C7B]/30 flex items-center gap-2">
+                        <input
+                          type="text"
+                          value={inlineSubAreaName}
+                          onChange={(e) => setInlineSubAreaName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              void handleCreateInlineSubArea();
+                            }
+                          }}
+                          placeholder="e.g., Eidgaon Bazar, Islamabad..."
+                          aria-label="New Sub-Area name"
+                          className="flex-1 min-w-0 h-9 px-3 rounded-lg bg-white dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-xs sm:text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+                        />
+                        <button
+                          type="button"
+                          disabled={savingInlineSubArea || !inlineSubAreaName.trim()}
+                          onClick={() => void handleCreateInlineSubArea()}
+                          className="h-9 px-3 rounded-lg bg-[#0E7C7B] hover:bg-[#095C5B] disabled:opacity-50 text-white text-xs font-bold whitespace-nowrap cursor-pointer"
+                        >
+                          {savingInlineSubArea ? 'Saving...' : 'Save Area'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               }

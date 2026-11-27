@@ -3,10 +3,9 @@ import {
   AlertCircle,
   BellRing,
   Building2,
-  Calendar,
   Check,
-  Clock,
   Copy,
+  Eye,
   KeyRound,
   Lock,
   LogOut,
@@ -20,6 +19,7 @@ import {
   ShieldCheck,
   Stethoscope,
   Trash2,
+  UserMinus,
   UserPlus,
   Users,
   WifiOff,
@@ -30,9 +30,8 @@ import { auth } from '../lib/firebase';
 import { useApp, TeamWorkspaceSubTab } from '../context/AppContext';
 import { StickyBackBar } from './StickyBackBar';
 import { DoctorsView } from './DoctorsView';
-import { OfficerSearchResult, TeamInvite } from '../types';
+import { OfficerSearchResult, TeamInvite, TeamSubArea } from '../types';
 import {
-  buildAreaIdSlug,
   deriveAreaJoinCode,
   formatFirebaseAuthError,
 } from '../services/firebaseTeam';
@@ -94,6 +93,16 @@ const OFFICER_ROLES = [
   'Regional Manager',
 ];
 
+const SUB_AREA_TYPES = [
+  'Market / Bazar',
+  'Union',
+  'Pourashava',
+  'Upazila HQ',
+  'Town / Ward',
+  'Hospital Zone',
+  'Other',
+];
+
 export const TeamWorkspaceView: React.FC = () => {
   const {
     dataset,
@@ -101,6 +110,15 @@ export const TeamWorkspaceView: React.FC = () => {
     teamSession,
     teamSubTab,
     setTeamSubTab,
+    teamMeta,
+    teamSubAreas,
+    teamSuperiors,
+    superiorAccessibleTeams,
+    activeViewingTeamId,
+    setActiveViewingTeamId,
+    isReadOnlySuperiorView,
+    effectiveTeamId,
+    activeTerritoryName,
     firebaseAuthReady,
     isProfileLoading,
     firebaseUserEmail,
@@ -112,20 +130,25 @@ export const TeamWorkspaceView: React.FC = () => {
     loginTeamWithFirebase,
     registerTeamWithFirebase,
     completeFirebaseAreaProfile,
+    updateTerritoryName,
+    saveSubArea,
+    deleteSubArea,
     pendingInvites,
     searchTeamOfficers,
     sendOfficerTeamInvite,
+    revokeTeamSuperior,
     acceptIncomingInvite,
     declineIncomingInvite,
     joinTeamWithCode,
     logoutTeam,
     isOnline,
-    areaMap,
-    doctorMap,
     openAddModal,
     openEditModal,
     requestDeleteRecord,
     setDoctorDirectoryHospitalFilter,
+    setDoctorDirectorySubAreaFilter,
+    hospitalDirectorySubAreaFilter,
+    setHospitalDirectorySubAreaFilter,
     pushToast,
   } = useApp();
 
@@ -184,20 +207,44 @@ export const TeamWorkspaceView: React.FC = () => {
   // Unlocked workspace state (sub-tab synced via NavigationContext for instant Home quick-pill jumps)
   const activeSubTab = teamSubTab;
   const setActiveSubTab = setTeamSubTab;
-  const [chamberSearch, setChamberSearch] = useState('');
   const [hospitalSearch, setHospitalSearch] = useState('');
+  const [subAreaSearch, setSubAreaSearch] = useState('');
   const [teamSearch, setTeamSearch] = useState('');
   const [copiedJoinCode, setCopiedJoinCode] = useState(false);
 
-  // Invite Member Modal state
+  // Inline Editable Territory Name state
+  const [editingTerritory, setEditingTerritory] = useState(false);
+  const [territoryNameDraft, setTerritoryNameDraft] = useState('');
+  const [territoryDistrictDraft, setTerritoryDistrictDraft] = useState('');
+  const [territoryUpazilaDraft, setTerritoryUpazilaDraft] = useState('');
+  const [territorySaving, setTerritorySaving] = useState(false);
+  const [territoryEditError, setTerritoryEditError] = useState('');
+
+  // Sub-Areas (Areas tab) Add / Edit / Delete state
+  const [showSubAreaForm, setShowSubAreaForm] = useState(false);
+  const [editingSubArea, setEditingSubArea] = useState<TeamSubArea | null>(null);
+  const [subAreaNameDraft, setSubAreaNameDraft] = useState('');
+  const [subAreaTypeDraft, setSubAreaTypeDraft] = useState('Market / Bazar');
+  const [subAreaNotesDraft, setSubAreaNotesDraft] = useState('');
+  const [subAreaSaving, setSubAreaSaving] = useState(false);
+  const [subAreaFormError, setSubAreaFormError] = useState('');
+  const [confirmDeleteSubAreaId, setConfirmDeleteSubAreaId] = useState<string | null>(null);
+  const [deletingSubAreaId, setDeletingSubAreaId] = useState<string | null>(null);
+
+  // Superior Revoke inline 2-tap confirm state
+  const [confirmRevokeSuperiorUid, setConfirmRevokeSuperiorUid] = useState<string | null>(null);
+  const [revokingSuperiorUid, setRevokingSuperiorUid] = useState<string | null>(null);
+
+  // Invite Member / Superior Modal state
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteModalMode, setInviteModalMode] = useState<'member' | 'superior'>('member');
   const [inviteSearchInput, setInviteSearchInput] = useState('');
   const [inviteSearchLoading, setInviteSearchLoading] = useState(false);
   const [inviteSearchResults, setInviteSearchResults] = useState<OfficerSearchResult[]>([]);
   const [inviteSearchDone, setInviteSearchDone] = useState(false);
   const [inviteSearchError, setInviteSearchError] = useState('');
   const [sendingInviteUid, setSendingInviteUid] = useState<string | null>(null);
-  const [sentInviteUids, setSentInviteUids] = useState<Record<string, boolean>>({});
+  const [sentInviteKeys, setSentInviteKeys] = useState<Record<string, boolean>>({});
 
   // Join Team by Code Modal state
   const [showJoinModal, setShowJoinModal] = useState(false);
@@ -208,45 +255,92 @@ export const TeamWorkspaceView: React.FC = () => {
   // Pending invite action busy tracker
   const [inviteActionId, setInviteActionId] = useState<string | null>(null);
 
-  const effectiveAreaId = teamSession?.areaId || '';
+  const effectiveAreaId = effectiveTeamId || teamSession?.teamId || teamSession?.areaId || '';
   const activeJoinCode =
-    teamSession?.joinCode || (effectiveAreaId ? deriveAreaJoinCode(effectiveAreaId) : '');
+    teamMeta?.joinCode ||
+    teamSession?.joinCode ||
+    (effectiveAreaId ? deriveAreaJoinCode(effectiveAreaId) : '');
 
-  const previewAreaSlug = useMemo(() => {
-    if (!districtInput.trim() && !upazilaInput.trim() && !areaNameInput.trim() && !customAreaCode.trim()) {
-      return '';
-    }
-    return buildAreaIdSlug(districtInput, upazilaInput, areaNameInput, customAreaCode);
-  }, [districtInput, upazilaInput, areaNameInput, customAreaCode]);
+  const scopedDoctors = useMemo(() => {
+    if (!teamSession) return [];
+    return dataset.Doctors.filter(
+      (d) => !effectiveAreaId || !d.Area_ID || d.Area_ID === effectiveAreaId
+    );
+  }, [dataset.Doctors, teamSession, effectiveAreaId]);
+
+  const scopedDoctorsCount = scopedDoctors.length;
+
+  const scopedHospitalsBase = useMemo(() => {
+    return dataset.Hospitals.filter(
+      (h) => !effectiveAreaId || !h.Area_ID || h.Area_ID === effectiveAreaId
+    );
+  }, [dataset.Hospitals, effectiveAreaId]);
+
+  const hospitalSubAreaOptions = useMemo(() => {
+    const names = new Set<string>();
+    teamSubAreas.forEach((sa) => {
+      if (sa.Area_Name.trim()) names.add(sa.Area_Name.trim());
+    });
+    scopedHospitalsBase.forEach((h) => {
+      const sub = (h.Sub_Area || h.areaName || '').trim();
+      if (sub) names.add(sub);
+    });
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [teamSubAreas, scopedHospitalsBase]);
 
   const scopedHospitals = useMemo(() => {
     const q = hospitalSearch.trim().toLowerCase();
-    return dataset.Hospitals.filter((h) => {
-      if (effectiveAreaId && h.Area_ID && h.Area_ID !== effectiveAreaId) return false;
+    const subFilter = hospitalDirectorySubAreaFilter.trim().toLowerCase();
+    return scopedHospitalsBase.filter((h) => {
+      const hospSub = String(h.Sub_Area || h.areaName || '').trim();
+      if (subFilter && hospSub.toLowerCase() !== subFilter) return false;
       if (!q) return true;
       return (
         String(h.Hospital_Name ?? '').toLowerCase().includes(q) ||
         String(h.Hospital_Type ?? '').toLowerCase().includes(q) ||
+        hospSub.toLowerCase().includes(q) ||
         String(h.Address ?? '').toLowerCase().includes(q) ||
         String(h.Phone ?? '').toLowerCase().includes(q)
       );
     });
-  }, [dataset.Hospitals, effectiveAreaId, hospitalSearch]);
+  }, [scopedHospitalsBase, hospitalSearch, hospitalDirectorySubAreaFilter]);
 
   const doctorCountByHospital = useMemo(() => {
     const counts = new Map<string, number>();
-    dataset.Doctors.forEach((d) => {
-      if (effectiveAreaId && d.Area_ID && d.Area_ID !== effectiveAreaId) return;
+    scopedDoctors.forEach((d) => {
       counts.set(d.Primary_Hospital_ID, (counts.get(d.Primary_Hospital_ID) || 0) + 1);
     });
     return counts;
-  }, [dataset.Doctors, effectiveAreaId]);
+  }, [scopedDoctors]);
 
-  const scopedDoctorsCount = useMemo(() => {
-    if (!teamSession) return 0;
-    return dataset.Doctors.filter((d) => !effectiveAreaId || !d.Area_ID || d.Area_ID === effectiveAreaId)
-      .length;
-  }, [dataset.Doctors, teamSession, effectiveAreaId]);
+  const doctorCountBySubArea = useMemo(() => {
+    const counts = new Map<string, number>();
+    scopedDoctors.forEach((d) => {
+      const key = String(d.Sub_Area || d.areaName || '').trim().toLowerCase();
+      if (key) counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    return counts;
+  }, [scopedDoctors]);
+
+  const hospitalCountBySubArea = useMemo(() => {
+    const counts = new Map<string, number>();
+    scopedHospitalsBase.forEach((h) => {
+      const key = String(h.Sub_Area || h.areaName || '').trim().toLowerCase();
+      if (key) counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    return counts;
+  }, [scopedHospitalsBase]);
+
+  const filteredSubAreas = useMemo(() => {
+    const q = subAreaSearch.trim().toLowerCase();
+    if (!q) return teamSubAreas;
+    return teamSubAreas.filter(
+      (sa) =>
+        sa.Area_Name.toLowerCase().includes(q) ||
+        String(sa.Market_Type ?? '').toLowerCase().includes(q) ||
+        String(sa.Notes ?? '').toLowerCase().includes(q)
+    );
+  }, [teamSubAreas, subAreaSearch]);
 
   const scopedTeamMembers = useMemo(() => {
     const q = teamSearch.trim().toLowerCase();
@@ -262,23 +356,6 @@ export const TeamWorkspaceView: React.FC = () => {
       );
     });
   }, [dataset.MPO_Users, effectiveAreaId, teamSearch]);
-
-  const scopedChambers = useMemo(() => {
-    const q = chamberSearch.trim().toLowerCase();
-    return dataset.Chambers.filter((c) => {
-      if (effectiveAreaId && c.Area_ID && c.Area_ID !== effectiveAreaId) return false;
-      if (!q) return true;
-      const docName = doctorMap.get(c.Doctor_ID)?.Doctor_Name || '';
-      return (
-        String(c.Chamber_Name ?? '').toLowerCase().includes(q) ||
-        docName.toLowerCase().includes(q) ||
-        String(c.Address ?? '').toLowerCase().includes(q) ||
-        String(c.Visiting_Days ?? '').toLowerCase().includes(q) ||
-        String(c.Visiting_Hours ?? '').toLowerCase().includes(q) ||
-        String(c.Assistant_Phone ?? '').toLowerCase().includes(q)
-      );
-    });
-  }, [dataset.Chambers, effectiveAreaId, chamberSearch, doctorMap]);
 
   const handleGoogleSignIn = async () => {
     setAuthError('');
@@ -400,7 +477,8 @@ export const TeamWorkspaceView: React.FC = () => {
     });
   };
 
-  const handleOpenInviteModal = () => {
+  const handleOpenInviteModal = (mode: 'member' | 'superior') => {
+    setInviteModalMode(mode);
     setInviteSearchInput('');
     setInviteSearchResults([]);
     setInviteSearchDone(false);
@@ -435,14 +513,133 @@ export const TeamWorkspaceView: React.FC = () => {
     setInviteSearchError('');
     setSendingInviteUid(recipient.uid);
     try {
-      const res = await sendOfficerTeamInvite(recipient);
+      const res = await sendOfficerTeamInvite(recipient, inviteModalMode);
       if (!res.ok) {
-        setInviteSearchError(res.error || 'Could not send team invite.');
+        setInviteSearchError(res.error || 'Could not send invite.');
       } else {
-        setSentInviteUids((prev) => ({ ...prev, [recipient.uid]: true }));
+        const key = `${inviteModalMode}:${recipient.uid}`;
+        setSentInviteKeys((prev) => ({ ...prev, [key]: true }));
       }
     } finally {
       setSendingInviteUid(null);
+    }
+  };
+
+  const handleStartTerritoryEdit = () => {
+    if (isReadOnlySuperiorView) return;
+    setTerritoryNameDraft(activeTerritoryName || teamSession?.territoryName || teamSession?.areaName || '');
+    setTerritoryDistrictDraft(teamMeta?.district || teamSession?.district || '');
+    setTerritoryUpazilaDraft(teamMeta?.upazila || teamSession?.upazila || '');
+    setTerritoryEditError('');
+    setEditingTerritory(true);
+  };
+
+  const handleSaveTerritoryEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setTerritoryEditError('');
+    const trimmed = territoryNameDraft.trim();
+    if (!trimmed) {
+      setTerritoryEditError('Territory name is required.');
+      return;
+    }
+    setTerritorySaving(true);
+    try {
+      const res = await updateTerritoryName(
+        trimmed,
+        territoryDistrictDraft.trim(),
+        territoryUpazilaDraft.trim()
+      );
+      if (!res.ok) {
+        setTerritoryEditError(res.error || 'Could not update territory name.');
+      } else {
+        setEditingTerritory(false);
+      }
+    } finally {
+      setTerritorySaving(false);
+    }
+  };
+
+  const handleOpenSubAreaAdd = () => {
+    if (isReadOnlySuperiorView) return;
+    setEditingSubArea(null);
+    setSubAreaNameDraft('');
+    setSubAreaTypeDraft('Market / Bazar');
+    setSubAreaNotesDraft('');
+    setSubAreaFormError('');
+    setShowSubAreaForm(true);
+  };
+
+  const handleOpenSubAreaEdit = (area: TeamSubArea) => {
+    if (isReadOnlySuperiorView) return;
+    setEditingSubArea(area);
+    setSubAreaNameDraft(area.Area_Name);
+    setSubAreaTypeDraft(area.Market_Type || 'Market / Bazar');
+    setSubAreaNotesDraft(area.Notes || '');
+    setSubAreaFormError('');
+    setShowSubAreaForm(true);
+  };
+
+  const handleSaveSubAreaSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubAreaFormError('');
+    const trimmed = subAreaNameDraft.trim();
+    if (!trimmed) {
+      setSubAreaFormError('Enter a Sub-Area / Market name.');
+      return;
+    }
+    setSubAreaSaving(true);
+    try {
+      const res = await saveSubArea({
+        SubArea_ID: editingSubArea?.SubArea_ID,
+        Area_Name: trimmed,
+        Market_Type: subAreaTypeDraft,
+        Notes: subAreaNotesDraft.trim(),
+        Created_At: editingSubArea?.Created_At,
+      });
+      if (!res.ok) {
+        setSubAreaFormError(res.error || 'Could not save Sub-Area.');
+      } else {
+        setShowSubAreaForm(false);
+        setEditingSubArea(null);
+        setSubAreaNameDraft('');
+        setSubAreaNotesDraft('');
+      }
+    } finally {
+      setSubAreaSaving(false);
+    }
+  };
+
+  const handleDeleteSubArea = async (subAreaId: string) => {
+    setDeletingSubAreaId(subAreaId);
+    try {
+      const res = await deleteSubArea(subAreaId);
+      if (!res.ok) {
+        pushToast({
+          type: 'error',
+          title: 'Could not delete Sub-Area',
+          message: res.error || 'Please try again.',
+        });
+      }
+    } finally {
+      setDeletingSubAreaId(null);
+      setConfirmDeleteSubAreaId(null);
+    }
+  };
+
+  const handleRevokeSuperior = async (superiorUid: string) => {
+    setRevokingSuperiorUid(superiorUid);
+    try {
+      const res = await revokeTeamSuperior(superiorUid);
+      if (!res.ok) {
+        pushToast({
+          type: 'error',
+          title: 'Could not revoke Superior access',
+          message: res.error || 'Please try again.',
+        });
+      }
+    } finally {
+      setRevokingSuperiorUid(null);
+      setConfirmRevokeSuperiorUid(null);
     }
   };
 
@@ -652,7 +849,7 @@ export const TeamWorkspaceView: React.FC = () => {
               />
             </div>
 
-            {/* Optional Join Existing Area ID toggle */}
+            {/* Optional Join Existing Team Code toggle */}
             <div>
               <button
                 type="button"
@@ -660,25 +857,23 @@ export const TeamWorkspaceView: React.FC = () => {
                 className="text-xs font-semibold text-[#0E7C7B] dark:text-[#149A99] hover:underline cursor-pointer"
               >
                 {showAreaCodeOption
-                  ? 'Hide shared Area ID field'
-                  : 'Joining a teammate? Enter shared Area ID (optional)'}
+                  ? 'Hide Team Join Code field'
+                  : 'Joining a teammate? Enter Team Join Code (optional)'}
               </button>
               {showAreaCodeOption && (
                 <div className="mt-1.5">
                   <input
                     type="text"
                     value={customAreaCode}
-                    onChange={(e) => setCustomAreaCode(e.target.value)}
-                    placeholder="e.g. dhaka-dhanmondi"
-                    className="w-full min-h-[42px] px-3.5 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-sm font-mono text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+                    onChange={(e) => setCustomAreaCode(e.target.value.toUpperCase())}
+                    placeholder="e.g. DI-4829"
+                    className="w-full min-h-[42px] px-3.5 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-sm font-mono uppercase text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
                   />
                 </div>
               )}
-              {previewAreaSlug && (
-                <div className="mt-1 text-[11px] text-[#0D2B45]/55 dark:text-[#EBF4FA]/55 font-mono truncate">
-                  Workspace ID: {previewAreaSlug}
-                </div>
-              )}
+              <div className="mt-1 text-[11px] text-[#0D2B45]/55 dark:text-[#EBF4FA]/55">
+                Private by default — only you can view your Territory until you invite a teammate or Superior.
+              </div>
             </div>
 
             {authError && (
@@ -732,8 +927,8 @@ export const TeamWorkspaceView: React.FC = () => {
                   Team / Area Workspace
                 </h1>
                 <p className="text-xs sm:text-sm text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 mt-0.5 leading-relaxed">
-                  Sign in with Google or email to manage private Doctors, Chambers, Hospitals, and
-                  Area Notes. Stays logged in offline automatically.
+                  Sign in with Google or email to manage private Doctors, Hospitals, Sub-Areas, and
+                  Team Members. Private by default &amp; stays logged in offline.
                 </p>
               </div>
             </div>
@@ -999,7 +1194,7 @@ export const TeamWorkspaceView: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Optional Join Existing Area ID toggle */}
+                {/* Optional Join Existing Team Code toggle */}
                 <div>
                   <button
                     type="button"
@@ -1007,25 +1202,23 @@ export const TeamWorkspaceView: React.FC = () => {
                     className="text-xs font-semibold text-[#0E7C7B] dark:text-[#149A99] hover:underline cursor-pointer"
                   >
                     {showAreaCodeOption
-                      ? 'Hide existing Area ID field'
-                      : 'Joining a teammate? Enter shared Area ID (optional)'}
+                      ? 'Hide Team Join Code field'
+                      : 'Joining a teammate? Enter Team Join Code (optional)'}
                   </button>
                   {showAreaCodeOption && (
                     <div className="mt-1.5 space-y-1">
                       <input
                         type="text"
                         value={customAreaCode}
-                        onChange={(e) => setCustomAreaCode(e.target.value)}
-                        placeholder="e.g. dhaka-dhanmondi-shahbagh"
-                        className="w-full min-h-[42px] px-3.5 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-sm font-mono text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+                        onChange={(e) => setCustomAreaCode(e.target.value.toUpperCase())}
+                        placeholder="e.g. DI-4829"
+                        className="w-full min-h-[42px] px-3.5 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-sm font-mono uppercase text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
                       />
                     </div>
                   )}
-                  {previewAreaSlug && (
-                    <div className="mt-1 text-[11px] text-[#0D2B45]/55 dark:text-[#EBF4FA]/55 font-mono truncate">
-                      Workspace ID: {previewAreaSlug}
-                    </div>
-                  )}
+                  <div className="mt-1 text-[11px] text-[#0D2B45]/55 dark:text-[#EBF4FA]/55">
+                    Private by default — nobody outside your invited Team or approved Superior can view your records.
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
@@ -1115,23 +1308,27 @@ export const TeamWorkspaceView: React.FC = () => {
   }
 
   // =========================================================================
-  // UNLOCKED STATE: Area-Scoped Private Firestore Workspace
+  // UNLOCKED STATE: Territory -> Sub-Area Private Firestore Workspace
   // =========================================================================
   const officerDisplayName =
     teamSession.mpoName ||
     firebaseUserName ||
     currentUser?.displayName ||
     'Field Officer';
-  const activeScopeMeta = [teamSession.district, teamSession.upazila]
-    .filter(Boolean)
-    .join(' · ');
+  const displayedDistrict = teamMeta?.district || teamSession.district || '';
+  const displayedUpazila = teamMeta?.upazila || teamSession.upazila || '';
+  const activeScopeMeta = [displayedDistrict, displayedUpazila].filter(Boolean).join(' · ');
+  const ownTeamId = teamSession.teamId || teamSession.areaId;
+  const ownTerritoryName = teamSession.territoryName || teamSession.areaName;
+  const memberCount = teamMeta?.members?.length || Math.max(1, scopedTeamMembers.length);
+  const superiorCount = teamSuperiors.length;
 
   return (
-    <div className="space-y-4">
-      {/* Sticky Top Header with ONE clean Logout button (no duplicate header or second Logout) */}
+    <div className="space-y-3.5">
+      {/* Sticky Top Header with ONE clean Logout button */}
       <StickyBackBar
         title="Team Workspace"
-        subtitle={[teamSession.areaName, teamSession.district].filter(Boolean).join(' · ')}
+        subtitle={[activeTerritoryName, displayedDistrict].filter(Boolean).join(' · ')}
         rightSlot={
           <button
             type="button"
@@ -1144,40 +1341,252 @@ export const TeamWorkspaceView: React.FC = () => {
         }
       />
 
-      {/* Live Incoming Team Invite Notification Banner */}
+      {/* Manager View Switcher (only shown if officer has approved read-only access to subordinate territories) */}
+      {superiorAccessibleTeams.length > 0 && (
+        <div className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-2.5 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+          <button
+            type="button"
+            onClick={() => setActiveViewingTeamId(null)}
+            className={`min-h-[36px] px-3 rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+              !isReadOnlySuperiorView
+                ? 'bg-[#0D2B45] dark:bg-[#0E7C7B] text-white'
+                : 'bg-[#F4F8FC] dark:bg-[#071522] text-[#0D2B45]/80 dark:text-[#EBF4FA]/80 hover:bg-[#EBF4FA] dark:hover:bg-[#102940]'
+            }`}
+          >
+            <Lock className="w-3.5 h-3.5 shrink-0" />
+            <span>My Territory ({ownTerritoryName})</span>
+          </button>
+
+          {superiorAccessibleTeams.map((team) => {
+            const active = activeViewingTeamId === team.teamId;
+            return (
+              <button
+                key={team.teamId}
+                type="button"
+                onClick={() => setActiveViewingTeamId(team.teamId)}
+                className={`min-h-[36px] px-3 rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                  active
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-200 border border-indigo-200/70 dark:border-indigo-500/30 hover:bg-indigo-100 dark:hover:bg-indigo-950/60'
+                }`}
+              >
+                <Eye className="w-3.5 h-3.5 shrink-0" />
+                <span>{team.territoryName}</span>
+                <span className="text-[10px] opacity-80">(View)</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Read-Only Manager View Banner */}
+      {isReadOnlySuperiorView && (
+        <div className="rounded-2xl bg-indigo-50 dark:bg-indigo-950/45 border border-indigo-200 dark:border-indigo-500/35 px-3.5 py-2.5 flex items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2 min-w-0">
+            <Eye className="w-4 h-4 text-indigo-600 dark:text-indigo-300 shrink-0" />
+            <div className="min-w-0">
+              <div className="text-xs font-bold text-indigo-900 dark:text-indigo-100 truncate">
+                Manager View (Read-Only) · {activeTerritoryName}
+              </div>
+              <div className="text-[11px] text-indigo-700/80 dark:text-indigo-200/80 truncate">
+                Viewing team territory records without edit permissions.
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActiveViewingTeamId(null)}
+            className="min-h-[34px] px-2.5 rounded-xl bg-white dark:bg-[#0D2235] border border-indigo-200 dark:border-indigo-500/40 text-[11px] font-bold text-indigo-700 dark:text-indigo-200 whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            My Territory
+          </button>
+        </div>
+      )}
+
+      {/* Editable Territory Strip (Territory Name + District/Upazila + Edit Pencil) */}
+      <div className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 px-3.5 py-3">
+        {!editingTerritory ? (
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-9 h-9 rounded-xl bg-[#E6FBF3] dark:bg-[#0C2E2B] text-[#0E7C7B] dark:text-[#22E3D0] flex items-center justify-center shrink-0">
+                <MapPin className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="font-display font-bold text-sm sm:text-base text-[#0D2B45] dark:text-white truncate">
+                    {activeTerritoryName}
+                  </span>
+                  {!isReadOnlySuperiorView && (
+                    <button
+                      type="button"
+                      onClick={handleStartTerritoryEdit}
+                      aria-label="Edit Territory Name"
+                      title="Edit Territory Name"
+                      className="min-h-[28px] min-w-[28px] rounded-lg inline-flex items-center justify-center text-[#0D2B45]/55 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/55 dark:hover:text-[#22E3D0] hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/60 cursor-pointer shrink-0 transition-colors"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[#0D2B45]/60 dark:text-[#EBF4FA]/65">
+                  {activeScopeMeta && <span>{activeScopeMeta}</span>}
+                  <span>
+                    {memberCount <= 1 && superiorCount === 0
+                      ? 'Private Territory'
+                      : `${memberCount} Officer${memberCount === 1 ? '' : 's'}${
+                          superiorCount > 0
+                            ? ` · ${superiorCount} Superior${superiorCount === 1 ? '' : 's'}`
+                            : ''
+                        }`}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <span className="px-2 py-1 rounded-lg bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 text-[10.5px] font-semibold text-[#0E7C7B] dark:text-[#22E3D0] whitespace-nowrap shrink-0">
+              {isReadOnlySuperiorView ? 'Read-Only' : isOnline ? 'Private Sync' : 'Offline'}
+            </span>
+          </div>
+        ) : (
+          <form onSubmit={handleSaveTerritoryEdit} className="space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-bold text-[#0D2B45] dark:text-white">
+                Edit Territory Name
+              </span>
+              <button
+                type="button"
+                onClick={() => setEditingTerritory(false)}
+                aria-label="Cancel editing territory"
+                className="p-1 rounded-lg text-[#0D2B45]/55 dark:text-[#EBF4FA]/55 hover:bg-[#F4F8FC] dark:hover:bg-[#13304C] cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <input
+                type="text"
+                required
+                value={territoryNameDraft}
+                onChange={(e) => {
+                  setTerritoryNameDraft(e.target.value);
+                  if (territoryEditError) setTerritoryEditError('');
+                }}
+                placeholder="Territory Name (e.g. Eidgaon Territory)"
+                aria-label="Territory Name"
+                className="w-full min-h-[40px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+              />
+              <input
+                type="text"
+                list="bd-districts-list"
+                value={territoryDistrictDraft}
+                onChange={(e) => setTerritoryDistrictDraft(e.target.value)}
+                placeholder="District (optional)"
+                aria-label="District"
+                className="w-full min-h-[40px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+              />
+              <input
+                type="text"
+                value={territoryUpazilaDraft}
+                onChange={(e) => setTerritoryUpazilaDraft(e.target.value)}
+                placeholder="Upazila / Thana (optional)"
+                aria-label="Upazila"
+                className="w-full min-h-[40px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+              />
+            </div>
+            {territoryEditError && (
+              <p className="text-xs font-medium text-rose-600 dark:text-rose-300">
+                {territoryEditError}
+              </p>
+            )}
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setEditingTerritory(false)}
+                className="min-h-[36px] px-3 rounded-xl border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-xs font-semibold text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={territorySaving}
+                className="min-h-[36px] px-3.5 rounded-xl bg-[#0E7C7B] hover:bg-[#095C5B] text-white text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>{territorySaving ? 'Saving...' : 'Save Territory'}</span>
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+
+      {/* Live Incoming Invites Banner (Member Invites & Superior Manager View Invites) */}
       {pendingInvites.length > 0 && (
         <div className="space-y-2.5" aria-live="polite">
           {pendingInvites.map((invite) => {
             const busy = inviteActionId === invite.inviteId;
+            const isSuperiorInvite = invite.inviteType === 'superior';
+            const inviteTerritory = invite.territoryName || invite.areaName;
             return (
               <div
                 key={invite.inviteId}
-                className="rounded-2xl bg-gradient-to-r from-[#E6FBF3] via-white to-[#EAF4FB] dark:from-[#0C2E2B] dark:via-[#0D2235] dark:to-[#102944] border border-[#0E7C7B]/35 dark:border-[#149A99]/45 shadow-sm p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                className={`rounded-2xl border shadow-sm p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                  isSuperiorInvite
+                    ? 'bg-indigo-50/90 dark:bg-indigo-950/45 border-indigo-300/70 dark:border-indigo-500/45'
+                    : 'bg-gradient-to-r from-[#E6FBF3] via-white to-[#EAF4FB] dark:from-[#0C2E2B] dark:via-[#0D2235] dark:to-[#102944] border-[#0E7C7B]/35 dark:border-[#149A99]/45'
+                }`}
               >
                 <div className="flex items-start gap-3 min-w-0">
-                  <div className="w-9 h-9 rounded-xl bg-[#0E7C7B] text-white flex items-center justify-center shrink-0 shadow-sm">
-                    <BellRing className="w-4 h-4" />
+                  <div
+                    className={`w-9 h-9 rounded-xl text-white flex items-center justify-center shrink-0 shadow-sm ${
+                      isSuperiorInvite ? 'bg-indigo-600' : 'bg-[#0E7C7B]'
+                    }`}
+                  >
+                    {isSuperiorInvite ? (
+                      <Eye className="w-4 h-4" />
+                    ) : (
+                      <BellRing className="w-4 h-4" />
+                    )}
                   </div>
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-[11px] font-bold uppercase tracking-wide text-[#0E7C7B] dark:text-[#22E3D0]">
-                        Team Invite
+                      <span
+                        className={`text-[11px] font-bold uppercase tracking-wide ${
+                          isSuperiorInvite
+                            ? 'text-indigo-700 dark:text-indigo-300'
+                            : 'text-[#0E7C7B] dark:text-[#22E3D0]'
+                        }`}
+                      >
+                        {isSuperiorInvite ? 'Manager View Invite (Read-Only)' : 'Team Invite'}
                       </span>
-                      {invite.joinCode && (
+                      {!isSuperiorInvite && invite.joinCode && (
                         <span className="px-1.5 py-0.5 rounded bg-[#0D2B45]/8 dark:bg-white/10 text-[10.5px] font-mono font-bold text-[#0D2B45] dark:text-white">
                           {invite.joinCode}
                         </span>
                       )}
                     </div>
                     <p className="text-xs sm:text-sm font-semibold text-[#0D2B45] dark:text-white mt-0.5 leading-snug">
-                      {invite.fromName} invited you to join{' '}
-                      <span className="text-[#0E7C7B] dark:text-[#22E3D0]">
-                        {invite.areaName}
-                        {invite.district ? ` (${invite.district})` : ''}
-                      </span>
+                      {isSuperiorInvite ? (
+                        <>
+                          {invite.fromName} invited you as Superior to view{' '}
+                          <span className="text-indigo-700 dark:text-indigo-300">
+                            {inviteTerritory}
+                            {invite.district ? ` (${invite.district})` : ''}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          {invite.fromName} invited you to join{' '}
+                          <span className="text-[#0E7C7B] dark:text-[#22E3D0]">
+                            {inviteTerritory}
+                            {invite.district ? ` (${invite.district})` : ''}
+                          </span>
+                        </>
+                      )}
                     </p>
                     <p className="text-[11px] text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 mt-0.5">
-                      Accept to share Doctors, Chambers, Hospitals & Team Members together.
+                      {isSuperiorInvite
+                        ? 'Read-only Manager View access — keeps your own private Territory untouched.'
+                        : 'Accept to share Doctors, Hospitals, Sub-Areas & Team Members together.'}
                     </p>
                   </div>
                 </div>
@@ -1195,10 +1604,20 @@ export const TeamWorkspaceView: React.FC = () => {
                     type="button"
                     disabled={busy}
                     onClick={() => void handleAcceptInvite(invite)}
-                    className="min-h-[38px] px-3.5 rounded-xl bg-[#0E7C7B] hover:bg-[#095C5B] text-white text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50 cursor-pointer transition-colors active:scale-[0.97]"
+                    className={`min-h-[38px] px-3.5 rounded-xl text-white text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50 cursor-pointer transition-colors active:scale-[0.97] ${
+                      isSuperiorInvite
+                        ? 'bg-indigo-600 hover:bg-indigo-700'
+                        : 'bg-[#0E7C7B] hover:bg-[#095C5B]'
+                    }`}
                   >
                     <Check className="w-3.5 h-3.5" />
-                    <span>{busy ? 'Joining...' : 'Accept & Join'}</span>
+                    <span>
+                      {busy
+                        ? 'Saving...'
+                        : isSuperiorInvite
+                          ? 'Accept View Access'
+                          : 'Accept & Join'}
+                    </span>
                   </button>
                 </div>
               </div>
@@ -1207,7 +1626,7 @@ export const TeamWorkspaceView: React.FC = () => {
         </div>
       )}
 
-      {/* Firestore Sync Error Banner (shown only if Firestore security rules block access) */}
+      {/* Firestore Sync Error Banner */}
       {firebaseSyncError && (
         <div
           role="alert"
@@ -1218,7 +1637,7 @@ export const TeamWorkspaceView: React.FC = () => {
         </div>
       )}
 
-      {/* 4 Full Working Firestore Tabs Immediately Visible: Doctors | Chambers | Hospitals | Team */}
+      {/* Exact 4 Clean Tabs: Doctors | Hospitals | Areas | Team */}
       <div
         role="tablist"
         aria-label="Team workspace sections"
@@ -1233,16 +1652,16 @@ export const TeamWorkspaceView: React.FC = () => {
               icon: Stethoscope,
             },
             {
-              id: 'chambers' as TeamWorkspaceSubTab,
-              label: 'Chambers',
-              count: scopedChambers.length,
-              icon: MapPin,
-            },
-            {
               id: 'hospitals' as TeamWorkspaceSubTab,
               label: 'Hospitals',
-              count: scopedHospitals.length,
+              count: scopedHospitalsBase.length,
               icon: Building2,
+            },
+            {
+              id: 'areas' as TeamWorkspaceSubTab,
+              label: 'Areas',
+              count: teamSubAreas.length,
+              icon: MapPin,
             },
             {
               id: 'team' as TeamWorkspaceSubTab,
@@ -1261,7 +1680,7 @@ export const TeamWorkspaceView: React.FC = () => {
               role="tab"
               aria-selected={active}
               onClick={() => setActiveSubTab(tab.id)}
-              className={`relative min-h-[44px] px-1.5 sm:px-3 rounded-xl text-[11px] sm:text-sm font-semibold flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+              className={`relative min-h-[44px] px-1 sm:px-3 rounded-xl text-[11px] sm:text-sm font-semibold flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
                 active
                   ? 'bg-[#0D2B45] dark:bg-[#0E7C7B] text-white'
                   : 'text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 hover:bg-[#F4F8FC] dark:hover:bg-[#071522]'
@@ -1282,145 +1701,20 @@ export const TeamWorkspaceView: React.FC = () => {
         })}
       </div>
 
-      {/* SUB-TAB 1: AREA-SCOPED DOCTORS */}
+      {/* =================================================================== */}
+      {/* SUB-TAB 1: TEAM-SCOPED DOCTORS (with Sub-Area Filter & Badges)      */}
+      {/* =================================================================== */}
       {activeSubTab === 'doctors' && (
         <DoctorsView areaScopeId={effectiveAreaId} embeddedInTeam />
       )}
 
-      {/* SUB-TAB 2: AREA-SCOPED CHAMBERS */}
-      {activeSubTab === 'chambers' && (
-        <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="relative flex-1 max-w-md">
-              <Search
-                className="w-4 h-4 text-[#0D2B45]/45 dark:text-[#EBF4FA]/45 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
-                aria-hidden="true"
-              />
-              <input
-                type="search"
-                value={chamberSearch}
-                onChange={(e) => setChamberSearch(e.target.value)}
-                placeholder="Search chambers, doctor, days, or address..."
-                aria-label="Search area chambers"
-                className="w-full min-h-[44px] pl-10 pr-3 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-base md:text-sm text-[#0D2B45] dark:text-white placeholder:text-[#0D2B45]/45 dark:placeholder:text-[#EBF4FA]/40 focus:outline-none focus:border-[#0E7C7B]"
-              />
-            </div>
-
-            <button
-              type="button"
-              onClick={() => openAddModal('Chambers', { Area_ID: effectiveAreaId })}
-              className="min-h-[44px] px-4 rounded-xl bg-[#0D2B45] hover:bg-[#133859] dark:bg-[#0E7C7B] dark:hover:bg-[#149A99] text-white text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Add Chamber</span>
-            </button>
-          </div>
-
-          {scopedChambers.length === 0 ? (
-            <div className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-8 text-center">
-              <MapPin className="w-7 h-7 text-[#0E7C7B] dark:text-[#149A99] mx-auto mb-2" />
-              <p className="font-display font-semibold text-base text-[#0D2B45] dark:text-white">
-                {chamberSearch
-                  ? 'No matching chambers found'
-                  : `No chambers added in ${teamSession.areaName} yet`}
-              </p>
-              <p className="text-xs sm:text-sm text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 mt-1">
-                Add consultation chambers with visiting days, hours, and assistant phone numbers.
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-              {scopedChambers.map((chamber, idx) => {
-                const linkedDoctor = doctorMap.get(chamber.Doctor_ID);
-                return (
-                  <article
-                    key={`${chamber.Chamber_ID}-${idx}`}
-                    className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-4 sm:p-5 flex flex-col justify-between gap-3"
-                  >
-                    <div>
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
-                          <h2 className="font-display font-bold text-base text-[#0D2B45] dark:text-white leading-snug">
-                            {chamber.Chamber_Name}
-                          </h2>
-                          {linkedDoctor && (
-                            <div className="mt-0.5 text-xs font-semibold text-[#0E7C7B] dark:text-[#22E3D0] truncate">
-                              {linkedDoctor.Doctor_Name}
-                              {linkedDoctor.Specialty ? ` · ${linkedDoctor.Specialty}` : ''}
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="flex items-center gap-0.5 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              openEditModal('Chambers', chamber as unknown as Record<string, unknown>)
-                            }
-                            aria-label={`Edit ${chamber.Chamber_Name}`}
-                            className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-lg text-[#0D2B45]/60 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/60 dark:hover:text-[#149A99] hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/50 cursor-pointer"
-                          >
-                            <Pencil className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              requestDeleteRecord(
-                                'Chambers',
-                                chamber as unknown as Record<string, unknown>,
-                                chamber.Chamber_Name
-                              )
-                            }
-                            aria-label={`Delete ${chamber.Chamber_Name}`}
-                            className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-lg text-[#0D2B45]/55 hover:text-rose-600 dark:text-[#EBF4FA]/55 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="mt-3 pt-3 border-t border-[#0D2B45]/8 dark:border-[#EBF4FA]/8 space-y-1.5 text-xs text-[#0D2B45]/75 dark:text-[#EBF4FA]/75">
-                        {chamber.Visiting_Days && (
-                          <div className="flex items-start gap-1.5">
-                            <Calendar className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#149A99] shrink-0 mt-0.5" />
-                            <span>{chamber.Visiting_Days}</span>
-                          </div>
-                        )}
-                        {chamber.Visiting_Hours && (
-                          <div className="flex items-start gap-1.5">
-                            <Clock className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#149A99] shrink-0 mt-0.5" />
-                            <span>{chamber.Visiting_Hours}</span>
-                          </div>
-                        )}
-                        {chamber.Address && (
-                          <div className="flex items-start gap-1.5">
-                            <MapPin className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#149A99] shrink-0 mt-0.5" />
-                            <span>{chamber.Address}</span>
-                          </div>
-                        )}
-                        {chamber.Assistant_Phone && (
-                          <div className="flex items-center gap-1.5 font-mono">
-                            <Phone className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#149A99] shrink-0" />
-                            <a href={`tel:${chamber.Assistant_Phone}`} className="hover:underline">
-                              {chamber.Assistant_Phone}
-                            </a>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* SUB-TAB 2: AREA-SCOPED HOSPITALS */}
+      {/* =================================================================== */}
+      {/* SUB-TAB 2: TEAM-SCOPED HOSPITALS (with Sub-Area Filter & Badges)    */}
+      {/* =================================================================== */}
       {activeSubTab === 'hospitals' && (
         <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="relative flex-1 max-w-md">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
+            <div className="relative flex-1">
               <Search
                 className="w-4 h-4 text-[#0D2B45]/45 dark:text-[#EBF4FA]/45 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
                 aria-hidden="true"
@@ -1429,35 +1723,81 @@ export const TeamWorkspaceView: React.FC = () => {
                 type="search"
                 value={hospitalSearch}
                 onChange={(e) => setHospitalSearch(e.target.value)}
-                placeholder="Search hospitals, clinics, or address..."
-                aria-label="Search area hospitals"
+                placeholder="Search hospitals, clinics, sub-area, or address..."
+                aria-label="Search territory hospitals"
                 className="w-full min-h-[44px] pl-10 pr-3 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-base md:text-sm text-[#0D2B45] dark:text-white placeholder:text-[#0D2B45]/45 dark:placeholder:text-[#EBF4FA]/40 focus:outline-none focus:border-[#0E7C7B]"
               />
             </div>
 
-            <button
-              type="button"
-              onClick={() => openAddModal('Hospitals', { Area_ID: effectiveAreaId })}
-              className="min-h-[44px] px-4 rounded-xl bg-[#0D2B45] hover:bg-[#133859] dark:bg-[#0E7C7B] dark:hover:bg-[#149A99] text-white text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Add Hospital</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <select
+                value={hospitalDirectorySubAreaFilter}
+                onChange={(e) => setHospitalDirectorySubAreaFilter(e.target.value)}
+                aria-label="Filter hospitals by Sub-Area"
+                className="flex-1 sm:flex-none sm:min-w-[180px] min-h-[44px] px-3 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-xs sm:text-sm font-medium text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+              >
+                <option value="">All Sub-Areas ({scopedHospitalsBase.length})</option>
+                {hospitalSubAreaOptions.map((areaName) => (
+                  <option key={areaName} value={areaName}>
+                    {areaName} ({hospitalCountBySubArea.get(areaName.toLowerCase()) || 0})
+                  </option>
+                ))}
+              </select>
+
+              {!isReadOnlySuperiorView && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    openAddModal('Hospitals', {
+                      Area_ID: effectiveAreaId,
+                      ...(hospitalDirectorySubAreaFilter
+                        ? { Sub_Area: hospitalDirectorySubAreaFilter }
+                        : {}),
+                    })
+                  }
+                  className="min-h-[44px] px-3.5 sm:px-4 rounded-xl bg-[#0D2B45] hover:bg-[#133859] dark:bg-[#0E7C7B] dark:hover:bg-[#149A99] text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Add Hospital</span>
+                </button>
+              )}
+            </div>
           </div>
+
+          {hospitalDirectorySubAreaFilter && (
+            <div className="flex items-center gap-2 text-xs">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#E6FBF3] dark:bg-[#0C2E2B] text-[#0E7C7B] dark:text-[#22E3D0] font-semibold">
+                <MapPin className="w-3.5 h-3.5" />
+                <span>Sub-Area: {hospitalDirectorySubAreaFilter}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => setHospitalDirectorySubAreaFilter('')}
+                className="text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 hover:text-[#0E7C7B] underline cursor-pointer"
+              >
+                Clear filter
+              </button>
+            </div>
+          )}
 
           {scopedHospitals.length === 0 ? (
             <div className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-8 text-center">
+              <Building2 className="w-7 h-7 text-[#0E7C7B] dark:text-[#22E3D0] mx-auto mb-2" />
               <p className="font-display font-semibold text-base text-[#0D2B45] dark:text-white">
-                No hospitals added in {teamSession.areaName} yet
+                {hospitalSearch || hospitalDirectorySubAreaFilter
+                  ? 'No matching hospitals found'
+                  : `No hospitals added in ${activeTerritoryName} yet`}
               </p>
               <p className="text-xs sm:text-sm text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 mt-1">
-                Add hospitals, clinics, or diagnostic centers for your private territory.
+                {isReadOnlySuperiorView
+                  ? 'This territory has no hospitals matching the current filter.'
+                  : 'Add hospitals, clinics, or diagnostic centers linked to your Territory Sub-Areas.'}
               </p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
               {scopedHospitals.map((hosp, idx) => {
-                const area = areaMap.get(hosp.Area_ID);
+                const subAreaLabel = (hosp.Sub_Area || hosp.areaName || '').trim();
                 const docCount = doctorCountByHospital.get(hosp.Hospital_ID) || 0;
                 return (
                   <div
@@ -1469,36 +1809,49 @@ export const TeamWorkspaceView: React.FC = () => {
                         <h2 className="font-display font-bold text-base text-[#0D2B45] dark:text-white leading-snug">
                           {hosp.Hospital_Name}
                         </h2>
-                        <div className="flex items-center gap-0.5 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() =>
-                              openEditModal('Hospitals', hosp as unknown as Record<string, unknown>)
-                            }
-                            aria-label={`Edit ${hosp.Hospital_Name}`}
-                            className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-lg text-[#0D2B45]/60 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/60 dark:hover:text-[#149A99] hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/50 cursor-pointer"
-                          >
-                            <Pencil className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              requestDeleteRecord(
-                                'Hospitals',
-                                hosp as unknown as Record<string, unknown>,
-                                hosp.Hospital_Name
-                              )
-                            }
-                            aria-label={`Delete ${hosp.Hospital_Name}`}
-                            className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-lg text-[#0D2B45]/55 hover:text-rose-600 dark:text-[#EBF4FA]/55 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
+                        {!isReadOnlySuperiorView && (
+                          <div className="flex items-center gap-0.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                openEditModal(
+                                  'Hospitals',
+                                  hosp as unknown as Record<string, unknown>
+                                )
+                              }
+                              aria-label={`Edit ${hosp.Hospital_Name}`}
+                              className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-lg text-[#0D2B45]/60 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/60 dark:hover:text-[#149A99] hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/50 cursor-pointer"
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                requestDeleteRecord(
+                                  'Hospitals',
+                                  hosp as unknown as Record<string, unknown>,
+                                  hosp.Hospital_Name
+                                )
+                              }
+                              aria-label={`Delete ${hosp.Hospital_Name}`}
+                              className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-lg text-[#0D2B45]/55 hover:text-rose-600 dark:text-[#EBF4FA]/55 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        )}
                       </div>
 
-                      <div className="mt-1 text-xs text-[#0E7C7B] dark:text-[#149A99] font-medium">
-                        {hosp.Hospital_Type || 'Hospital / Clinic'}
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
+                        <span className="text-[#0E7C7B] dark:text-[#22E3D0] font-semibold">
+                          {hosp.Hospital_Type || 'Hospital / Clinic'}
+                        </span>
+                        {subAreaLabel && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#EBF4FA] dark:bg-[#102E47] text-[11px] font-semibold text-[#0D2B45] dark:text-[#9FD8F5]">
+                            <MapPin className="w-3 h-3 text-[#0E7C7B] dark:text-[#22E3D0]" />
+                            {subAreaLabel}
+                          </span>
+                        )}
                       </div>
 
                       <div className="mt-3 pt-3 border-t border-[#0D2B45]/8 dark:border-[#EBF4FA]/8 space-y-1.5 text-xs text-[#0D2B45]/75 dark:text-[#EBF4FA]/75">
@@ -1506,12 +1859,6 @@ export const TeamWorkspaceView: React.FC = () => {
                           <div className="flex items-start gap-1.5">
                             <MapPin className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#149A99] shrink-0 mt-0.5" />
                             <span>{hosp.Address}</span>
-                          </div>
-                        )}
-                        {area && (
-                          <div className="text-[#0D2B45]/60 dark:text-[#EBF4FA]/60">
-                            Area: {area.Area_Name}
-                            {area.District ? ` · ${area.District}` : ''}
                           </div>
                         )}
                         {hosp.Phone && (
@@ -1535,7 +1882,7 @@ export const TeamWorkspaceView: React.FC = () => {
                           setDoctorDirectoryHospitalFilter(hosp.Hospital_ID);
                           setActiveSubTab('doctors');
                         }}
-                        className="min-h-[40px] px-3 rounded-xl bg-[#EBF4FA] dark:bg-[#133859] text-xs font-semibold text-[#0E7C7B] dark:text-[#7CE0DF] hover:bg-[#dcecf7] dark:hover:bg-[#1C4A73] transition-colors cursor-pointer"
+                        className="min-h-[38px] px-3 rounded-xl bg-[#EBF4FA] dark:bg-[#133859] text-xs font-semibold text-[#0E7C7B] dark:text-[#7CE0DF] hover:bg-[#dcecf7] dark:hover:bg-[#1C4A73] transition-colors cursor-pointer"
                       >
                         View Doctors
                       </button>
@@ -1548,42 +1895,325 @@ export const TeamWorkspaceView: React.FC = () => {
         </div>
       )}
 
-      {/* SUB-TAB 4: TEAM MEMBERS AT TOP + INVITE / JOIN ACTIONS + OFFICER PROFILE & JOIN CODE AT BOTTOM */}
+      {/* =================================================================== */}
+      {/* SUB-TAB 3: TERRITORY SUB-AREAS / MARKETS MANAGER                    */}
+      {/* =================================================================== */}
+      {activeSubTab === 'areas' && (
+        <div className="space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div className="relative flex-1 max-w-md">
+              <Search
+                className="w-4 h-4 text-[#0D2B45]/45 dark:text-[#EBF4FA]/45 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+                aria-hidden="true"
+              />
+              <input
+                type="search"
+                value={subAreaSearch}
+                onChange={(e) => setSubAreaSearch(e.target.value)}
+                placeholder="Search sub-areas, markets, or unions..."
+                aria-label="Search sub-areas"
+                className="w-full min-h-[44px] pl-10 pr-3 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-base md:text-sm text-[#0D2B45] dark:text-white placeholder:text-[#0D2B45]/45 dark:placeholder:text-[#EBF4FA]/40 focus:outline-none focus:border-[#0E7C7B]"
+              />
+            </div>
+
+            {!isReadOnlySuperiorView && (
+              <button
+                type="button"
+                onClick={handleOpenSubAreaAdd}
+                className="min-h-[44px] px-4 rounded-xl bg-[#0D2B45] hover:bg-[#133859] dark:bg-[#0E7C7B] dark:hover:bg-[#149A99] text-white text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add Sub-Area</span>
+              </button>
+            )}
+          </div>
+
+          {/* Inline Add / Edit Sub-Area Form */}
+          {showSubAreaForm && !isReadOnlySuperiorView && (
+            <form
+              onSubmit={handleSaveSubAreaSubmit}
+              className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0E7C7B]/35 dark:border-[#149A99]/45 p-4 sm:p-5 space-y-3 shadow-sm"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-display font-bold text-sm sm:text-base text-[#0D2B45] dark:text-white">
+                  {editingSubArea ? 'Edit Sub-Area / Market' : `Add Sub-Area under ${activeTerritoryName}`}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSubAreaForm(false);
+                    setEditingSubArea(null);
+                  }}
+                  aria-label="Close sub-area form"
+                  className="p-1 rounded-lg text-[#0D2B45]/55 dark:text-[#EBF4FA]/55 hover:bg-[#F4F8FC] dark:hover:bg-[#13304C] cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label
+                    htmlFor="subarea-name-input"
+                    className="block text-xs font-semibold text-[#0D2B45] dark:text-[#EBF4FA] mb-1"
+                  >
+                    Sub-Area / Market Name *
+                  </label>
+                  <input
+                    id="subarea-name-input"
+                    type="text"
+                    required
+                    value={subAreaNameDraft}
+                    onChange={(e) => {
+                      setSubAreaNameDraft(e.target.value);
+                      if (subAreaFormError) setSubAreaFormError('');
+                    }}
+                    placeholder="e.g. Eidgaon Bazar, Islamabad Union"
+                    className="w-full min-h-[42px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="subarea-type-select"
+                    className="block text-xs font-semibold text-[#0D2B45] dark:text-[#EBF4FA] mb-1"
+                  >
+                    Market Type
+                  </label>
+                  <select
+                    id="subarea-type-select"
+                    value={subAreaTypeDraft}
+                    onChange={(e) => setSubAreaTypeDraft(e.target.value)}
+                    className="w-full min-h-[42px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+                  >
+                    {SUB_AREA_TYPES.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="subarea-notes-input"
+                  className="block text-xs font-semibold text-[#0D2B45] dark:text-[#EBF4FA] mb-1"
+                >
+                  Market Notes (Optional)
+                </label>
+                <input
+                  id="subarea-notes-input"
+                  type="text"
+                  value={subAreaNotesDraft}
+                  onChange={(e) => setSubAreaNotesDraft(e.target.value)}
+                  placeholder="e.g. Market day: Sun & Wed · High pediatric volume"
+                  className="w-full min-h-[42px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+                />
+              </div>
+
+              {subAreaFormError && (
+                <p className="text-xs font-medium text-rose-600 dark:text-rose-300">
+                  {subAreaFormError}
+                </p>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSubAreaForm(false);
+                    setEditingSubArea(null);
+                  }}
+                  className="min-h-[38px] px-3.5 rounded-xl border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-xs font-semibold text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={subAreaSaving}
+                  className="min-h-[38px] px-4 rounded-xl bg-[#0E7C7B] hover:bg-[#095C5B] text-white text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>
+                    {subAreaSaving
+                      ? 'Saving...'
+                      : editingSubArea
+                        ? 'Update Sub-Area'
+                        : 'Save Sub-Area'}
+                  </span>
+                </button>
+              </div>
+            </form>
+          )}
+
+          {filteredSubAreas.length === 0 ? (
+            <div className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-8 text-center">
+              <MapPin className="w-7 h-7 text-[#0E7C7B] dark:text-[#22E3D0] mx-auto mb-2" />
+              <p className="font-display font-semibold text-base text-[#0D2B45] dark:text-white">
+                {subAreaSearch
+                  ? 'No matching Sub-Areas found'
+                  : `No Sub-Areas / Markets added under ${activeTerritoryName} yet`}
+              </p>
+              <p className="text-xs sm:text-sm text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 mt-1 max-w-md mx-auto">
+                Add your 5–12 markets, unions, or bazar zones here. They automatically populate the
+                required Sub-Area dropdown when adding Doctors and Hospitals.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+              {filteredSubAreas.map((area) => {
+                const key = area.Area_Name.trim().toLowerCase();
+                const docCount = doctorCountBySubArea.get(key) || 0;
+                const hospCount = hospitalCountBySubArea.get(key) || 0;
+                const confirmingDelete = confirmDeleteSubAreaId === area.SubArea_ID;
+                const deleting = deletingSubAreaId === area.SubArea_ID;
+
+                return (
+                  <article
+                    key={area.SubArea_ID}
+                    className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-4 flex flex-col justify-between gap-3"
+                  >
+                    <div>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <h2 className="font-display font-bold text-base text-[#0D2B45] dark:text-white leading-snug">
+                            {area.Area_Name}
+                          </h2>
+                          <span className="inline-block mt-1 px-2 py-0.5 rounded-md bg-[#EBF4FA] dark:bg-[#102E47] text-[11px] font-semibold text-[#0E7C7B] dark:text-[#7CE0DF]">
+                            {area.Market_Type || 'Market / Bazar'}
+                          </span>
+                        </div>
+
+                        {!isReadOnlySuperiorView && (
+                          <div className="flex items-center gap-0.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenSubAreaEdit(area)}
+                              aria-label={`Edit ${area.Area_Name}`}
+                              className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-[#0D2B45]/60 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/60 dark:hover:text-[#149A99] hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/50 cursor-pointer"
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </button>
+                            {!confirmingDelete ? (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeleteSubAreaId(area.SubArea_ID)}
+                                aria-label={`Delete ${area.Area_Name}`}
+                                className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-[#0D2B45]/55 hover:text-rose-600 dark:text-[#EBF4FA]/55 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            ) : (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  disabled={deleting}
+                                  onClick={() => void handleDeleteSubArea(area.SubArea_ID)}
+                                  className="min-h-[32px] px-2 rounded-lg bg-rose-600 text-white text-[11px] font-bold cursor-pointer disabled:opacity-50"
+                                >
+                                  {deleting ? '...' : 'Delete'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteSubAreaId(null)}
+                                  className="min-h-[32px] px-2 rounded-lg border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-[11px] font-semibold text-[#0D2B45]/70 dark:text-[#EBF4FA]/70 cursor-pointer"
+                                >
+                                  No
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {area.Notes && (
+                        <p className="mt-2.5 text-xs text-[#0D2B45]/70 dark:text-[#EBF4FA]/70 leading-relaxed">
+                          {area.Notes}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="pt-2.5 border-t border-[#0D2B45]/8 dark:border-[#EBF4FA]/8 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDoctorDirectorySubAreaFilter(area.Area_Name);
+                          setActiveSubTab('doctors');
+                        }}
+                        className="flex-1 min-h-[36px] px-2.5 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] hover:bg-[#EBF4FA] dark:hover:bg-[#133859] border border-[#0D2B45]/8 dark:border-[#EBF4FA]/10 text-xs font-semibold text-[#0D2B45] dark:text-[#EBF4FA] inline-flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                      >
+                        <Stethoscope className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#22E3D0]" />
+                        <span>{docCount} Doctors</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHospitalDirectorySubAreaFilter(area.Area_Name);
+                          setActiveSubTab('hospitals');
+                        }}
+                        className="flex-1 min-h-[36px] px-2.5 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] hover:bg-[#EBF4FA] dark:hover:bg-[#133859] border border-[#0D2B45]/8 dark:border-[#EBF4FA]/10 text-xs font-semibold text-[#0D2B45] dark:text-[#EBF4FA] inline-flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                      >
+                        <Building2 className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#22E3D0]" />
+                        <span>{hospCount} Hospitals</span>
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* SUB-TAB 4: TEAM MEMBERS + SUPERIOR ACCESS + OFFICER PROFILE         */}
+      {/* =================================================================== */}
       {activeSubTab === 'team' && (
         <div className="space-y-4">
-          {/* Action Row: Invite Member + Join Team + Add Manual Contact */}
-          <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={handleOpenInviteModal}
-              className="min-h-[44px] px-3.5 rounded-xl bg-[#0E7C7B] hover:bg-[#095C5B] text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors active:scale-[0.98]"
-            >
-              <UserPlus className="w-4 h-4 shrink-0" />
-              <span>Invite Member</span>
-            </button>
+          {/* Action Row (hidden in Read-Only Manager View) */}
+          {!isReadOnlySuperiorView && (
+            <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleOpenInviteModal('member')}
+                className="min-h-[44px] px-3 rounded-xl bg-[#0E7C7B] hover:bg-[#095C5B] text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors active:scale-[0.98]"
+              >
+                <UserPlus className="w-4 h-4 shrink-0" />
+                <span>Invite Member</span>
+              </button>
 
-            <button
-              type="button"
-              onClick={() => {
-                setJoinCodeInput('');
-                setJoinCodeError('');
-                setShowJoinModal(true);
-              }}
-              className="min-h-[44px] px-3.5 rounded-xl bg-[#0D2B45] hover:bg-[#133859] dark:bg-[#143757] dark:hover:bg-[#1B4972] text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors active:scale-[0.98]"
-            >
-              <KeyRound className="w-4 h-4 shrink-0" />
-              <span>Join Team</span>
-            </button>
+              <button
+                type="button"
+                onClick={() => handleOpenInviteModal('superior')}
+                className="min-h-[44px] px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors active:scale-[0.98]"
+              >
+                <Eye className="w-4 h-4 shrink-0" />
+                <span>Invite Superior</span>
+              </button>
 
-            <button
-              type="button"
-              onClick={() => openAddModal('MPO_Users', { Area_ID: effectiveAreaId })}
-              className="col-span-2 sm:col-span-1 sm:ml-auto min-h-[42px] px-3.5 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 hover:border-[#0E7C7B] text-[#0D2B45] dark:text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors"
-            >
-              <Plus className="w-4 h-4 shrink-0 text-[#0E7C7B] dark:text-[#22E3D0]" />
-              <span>Add Manual Contact</span>
-            </button>
-          </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setJoinCodeInput('');
+                  setJoinCodeError('');
+                  setShowJoinModal(true);
+                }}
+                className="min-h-[42px] px-3 rounded-xl bg-[#0D2B45] hover:bg-[#133859] dark:bg-[#143757] dark:hover:bg-[#1B4972] text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors active:scale-[0.98]"
+              >
+                <KeyRound className="w-4 h-4 shrink-0" />
+                <span>Join Team</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => openAddModal('MPO_Users', { Area_ID: effectiveAreaId })}
+                className="min-h-[42px] px-3 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 hover:border-[#0E7C7B] text-[#0D2B45] dark:text-white text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer transition-colors"
+              >
+                <Plus className="w-4 h-4 shrink-0 text-[#0E7C7B] dark:text-[#22E3D0]" />
+                <span>Add Contact</span>
+              </button>
+            </div>
+          )}
 
           {/* Search Team Members */}
           <div className="relative">
@@ -1596,22 +2226,22 @@ export const TeamWorkspaceView: React.FC = () => {
               value={teamSearch}
               onChange={(e) => setTeamSearch(e.target.value)}
               placeholder="Search team members by name, role, or phone..."
-              aria-label="Search area team directory"
+              aria-label="Search territory team directory"
               className="w-full min-h-[44px] pl-10 pr-3 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-base md:text-sm text-[#0D2B45] dark:text-white placeholder:text-[#0D2B45]/45 dark:placeholder:text-[#EBF4FA]/40 focus:outline-none focus:border-[#0E7C7B]"
             />
           </div>
 
-          {/* Team Members List (Top Section — clean cards supporting 1, 2, 4, or more officers) */}
+          {/* Team Members List */}
           {scopedTeamMembers.length === 0 ? (
             <div className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-7 text-center">
               <Users className="w-7 h-7 text-[#0E7C7B] dark:text-[#22E3D0] mx-auto mb-2" />
               <p className="font-display font-semibold text-base text-[#0D2B45] dark:text-white">
                 {teamSearch
                   ? 'No matching team members found'
-                  : `No officers listed in ${teamSession.areaName} yet`}
+                  : `No officers listed in ${activeTerritoryName} yet`}
               </p>
               <p className="text-xs sm:text-sm text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 mt-1">
-                Tap Invite Member or share your Team Join Code below to collaborate in this area.
+                Tap Invite Member or share your Team Join Code below to collaborate together.
               </p>
             </div>
           ) : (
@@ -1647,41 +2277,46 @@ export const TeamWorkspaceView: React.FC = () => {
                             : ''}
                         </div>
                       </div>
-                      <div className="flex items-center gap-0.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            openEditModal('MPO_Users', member as unknown as Record<string, unknown>)
-                          }
-                          aria-label={`Edit ${member.MPO_Name}`}
-                          className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-[#0D2B45]/60 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/60 dark:hover:text-[#149A99] hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/50 cursor-pointer"
-                        >
-                          <Pencil className="w-4 h-4" />
-                        </button>
-                        {!isSelf && (
+                      {!isReadOnlySuperiorView && (
+                        <div className="flex items-center gap-0.5 shrink-0">
                           <button
                             type="button"
                             onClick={() =>
-                              requestDeleteRecord(
+                              openEditModal(
                                 'MPO_Users',
-                                member as unknown as Record<string, unknown>,
-                                member.MPO_Name
+                                member as unknown as Record<string, unknown>
                               )
                             }
-                            aria-label={`Delete ${member.MPO_Name}`}
-                            className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-[#0D2B45]/55 hover:text-rose-600 dark:text-[#EBF4FA]/55 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                            aria-label={`Edit ${member.MPO_Name}`}
+                            className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-[#0D2B45]/60 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/60 dark:hover:text-[#149A99] hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/50 cursor-pointer"
                           >
-                            <Trash2 className="w-4 h-4" />
+                            <Pencil className="w-4 h-4" />
                           </button>
-                        )}
-                      </div>
+                          {!isSelf && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                requestDeleteRecord(
+                                  'MPO_Users',
+                                  member as unknown as Record<string, unknown>,
+                                  member.MPO_Name
+                                )
+                              }
+                              aria-label={`Delete ${member.MPO_Name}`}
+                              className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-[#0D2B45]/55 hover:text-rose-600 dark:text-[#EBF4FA]/55 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     <div className="pt-2.5 border-t border-[#0D2B45]/8 dark:border-[#EBF4FA]/8 space-y-1.5 text-xs text-[#0D2B45]/75 dark:text-[#EBF4FA]/75">
                       <div className="flex items-center gap-1.5">
                         <MapPin className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#149A99] shrink-0" />
                         <span className="truncate">
-                          {member.Area || teamSession.areaName}
+                          {member.Area || activeTerritoryName}
                           {member.Territory ? ` · ${member.Territory}` : ''}
                         </span>
                       </div>
@@ -1708,96 +2343,198 @@ export const TeamWorkspaceView: React.FC = () => {
             </div>
           )}
 
-          {/* Signed-in Officer Profile & Shareable Team Join Code Card — Cleanly at BOTTOM of Team Tab */}
+          {/* Superior Access (Optional Read-Only Manager View) Section */}
           <section
-            aria-label="Your Officer Profile and Team Join Code"
-            className="rounded-2xl bg-gradient-to-br from-[#F7FBFD] to-[#EDF6FA] dark:from-[#0C2136] dark:to-[#0A1A2B] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 p-4 sm:p-5 space-y-3.5 mt-2"
+            aria-label="Superior Manager View Access"
+            className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-4 sm:p-5 space-y-3"
           >
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#0D2B45] to-[#0E7C7B] text-white font-display font-bold text-base flex items-center justify-center shrink-0 shadow-sm">
-                  {officerDisplayName.slice(0, 1).toUpperCase()}
-                </div>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <h3 className="font-display font-bold text-base text-[#0D2B45] dark:text-white truncate">
-                      {officerDisplayName}
-                    </h3>
-                    {teamSession.role && (
-                      <span className="px-2 py-0.5 rounded-md bg-[#0D2B45]/8 dark:bg-[#14385B] text-[10.5px] font-bold text-[#0D2B45]/80 dark:text-[#7CE0DF]">
-                        {teamSession.role}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5 text-xs">
-                    <span className="inline-flex items-center gap-1 font-semibold text-[#0E7C7B] dark:text-[#22E3D0]">
-                      <MapPin className="w-3.5 h-3.5 shrink-0" />
-                      <span>
-                        {teamSession.areaName}
-                        {activeScopeMeta ? ` · ${activeScopeMeta}` : ''}
-                      </span>
-                    </span>
-                  </div>
-                  {(teamSession.email || firebaseUserEmail || teamSession.phone) && (
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1 text-[11.5px] text-[#0D2B45]/65 dark:text-[#EBF4FA]/65">
-                      {(teamSession.email || firebaseUserEmail) && (
-                        <span className="truncate">
-                          {teamSession.email || firebaseUserEmail}
-                        </span>
-                      )}
-                      {teamSession.phone && (
-                        <span className="font-mono">{teamSession.phone}</span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <span className="px-2 py-1 rounded-lg bg-white dark:bg-[#071522] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 text-[10.5px] font-semibold text-[#0E7C7B] dark:text-[#22E3D0] whitespace-nowrap shrink-0">
-                {isOnline ? 'Synced' : 'Offline'}
-              </span>
-            </div>
-
-            {/* Shareable Team / Area Join Code Row */}
-            <div className="pt-3 border-t border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div className="flex items-start justify-between gap-2.5">
               <div className="min-w-0">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-[#0D2B45]/55 dark:text-[#EBF4FA]/55">
-                  Team Join Code
+                <div className="flex items-center gap-1.5">
+                  <Eye className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                  <h3 className="font-display font-bold text-sm sm:text-base text-[#0D2B45] dark:text-white">
+                    Superior Access (Manager View)
+                  </h3>
                 </div>
-                <p className="text-xs text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 mt-0.5">
-                  Share this code with area teammates so they can join your shared workspace.
+                <p className="text-[11.5px] text-[#0D2B45]/60 dark:text-[#EBF4FA]/65 mt-0.5">
+                  Optional read-only visibility for your Manager/Superior. Private by default &amp; revocable anytime.
                 </p>
               </div>
-
-              <div className="flex items-center gap-2 shrink-0">
-                <span className="px-3.5 py-2 rounded-xl bg-white dark:bg-[#071522] border border-[#0E7C7B]/30 font-mono font-extrabold text-sm sm:text-base tracking-wider text-[#0D2B45] dark:text-[#5EEAD4]">
-                  {activeJoinCode}
-                </span>
+              {!isReadOnlySuperiorView && (
                 <button
                   type="button"
-                  onClick={handleCopyJoinCode}
-                  className="min-h-[40px] px-3.5 rounded-xl bg-[#0E7C7B] hover:bg-[#095C5B] text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition-colors active:scale-[0.97]"
+                  onClick={() => handleOpenInviteModal('superior')}
+                  className="min-h-[34px] px-2.5 rounded-xl bg-indigo-50 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-500/35 text-[11px] font-bold text-indigo-700 dark:text-indigo-200 hover:bg-indigo-100 dark:hover:bg-indigo-950/75 whitespace-nowrap shrink-0 cursor-pointer"
                 >
-                  {copiedJoinCode ? (
-                    <>
-                      <Check className="w-3.5 h-3.5" />
-                      <span>Copied</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3.5 h-3.5" />
-                      <span>Copy</span>
-                    </>
-                  )}
+                  + Invite Superior
                 </button>
-              </div>
+              )}
             </div>
+
+            {teamSuperiors.length === 0 ? (
+              <div className="rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/8 dark:border-[#EBF4FA]/8 px-3.5 py-3 flex items-center gap-2.5 text-xs text-[#0D2B45]/70 dark:text-[#EBF4FA]/70">
+                <Lock className="w-4 h-4 text-[#0E7C7B] dark:text-[#22E3D0] shrink-0" />
+                <span>
+                  No Superior currently has view access. Only members of this Territory can view your Doctors, Hospitals, and Sub-Areas.
+                </span>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {teamSuperiors.map((sup) => {
+                  const confirming = confirmRevokeSuperiorUid === sup.uid;
+                  const revoking = revokingSuperiorUid === sup.uid;
+                  return (
+                    <div
+                      key={sup.uid}
+                      className="rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-3 flex items-center justify-between gap-2.5"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="font-display font-bold text-sm text-[#0D2B45] dark:text-white truncate">
+                            {sup.officerName}
+                          </span>
+                          <span className="px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-500/20 text-[10px] font-bold text-indigo-700 dark:text-indigo-200 shrink-0">
+                            View Only
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 truncate mt-0.5">
+                          {sup.role || 'Superior'}
+                          {sup.email ? ` · ${sup.email}` : ''}
+                          {sup.phone ? ` · ${sup.phone}` : ''}
+                        </div>
+                      </div>
+
+                      {!isReadOnlySuperiorView && (
+                        <div className="shrink-0">
+                          {!confirming ? (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmRevokeSuperiorUid(sup.uid)}
+                              className="min-h-[34px] px-2.5 rounded-xl border border-rose-200 dark:border-rose-500/35 bg-rose-50 dark:bg-rose-950/40 text-[11px] font-bold text-rose-600 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-950/60 inline-flex items-center gap-1 cursor-pointer"
+                            >
+                              <UserMinus className="w-3.5 h-3.5" />
+                              <span>Revoke</span>
+                            </button>
+                          ) : (
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                disabled={revoking}
+                                onClick={() => void handleRevokeSuperior(sup.uid)}
+                                className="min-h-[32px] px-2.5 rounded-lg bg-rose-600 text-white text-[11px] font-bold cursor-pointer disabled:opacity-50"
+                              >
+                                {revoking ? '...' : 'Confirm Revoke'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmRevokeSuperiorUid(null)}
+                                className="min-h-[32px] px-2 rounded-lg border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-[11px] font-semibold text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </section>
+
+          {/* Signed-in Officer Profile & Shareable Team Join Code Card — Cleanly at BOTTOM of Team Tab */}
+          {!isReadOnlySuperiorView && (
+            <section
+              aria-label="Your Officer Profile and Team Join Code"
+              className="rounded-2xl bg-gradient-to-br from-[#F7FBFD] to-[#EDF6FA] dark:from-[#0C2136] dark:to-[#0A1A2B] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 p-4 sm:p-5 space-y-3.5 mt-2"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#0D2B45] to-[#0E7C7B] text-white font-display font-bold text-base flex items-center justify-center shrink-0 shadow-sm">
+                    {officerDisplayName.slice(0, 1).toUpperCase()}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <h3 className="font-display font-bold text-base text-[#0D2B45] dark:text-white truncate">
+                        {officerDisplayName}
+                      </h3>
+                      {teamSession.role && (
+                        <span className="px-2 py-0.5 rounded-md bg-[#0D2B45]/8 dark:bg-[#14385B] text-[10.5px] font-bold text-[#0D2B45]/80 dark:text-[#7CE0DF]">
+                          {teamSession.role}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5 text-xs">
+                      <span className="inline-flex items-center gap-1 font-semibold text-[#0E7C7B] dark:text-[#22E3D0]">
+                        <MapPin className="w-3.5 h-3.5 shrink-0" />
+                        <span>
+                          {activeTerritoryName}
+                          {activeScopeMeta ? ` · ${activeScopeMeta}` : ''}
+                        </span>
+                      </span>
+                    </div>
+                    {(teamSession.email || firebaseUserEmail || teamSession.phone) && (
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1 text-[11.5px] text-[#0D2B45]/65 dark:text-[#EBF4FA]/65">
+                        {(teamSession.email || firebaseUserEmail) && (
+                          <span className="truncate">
+                            {teamSession.email || firebaseUserEmail}
+                          </span>
+                        )}
+                        {teamSession.phone && (
+                          <span className="font-mono">{teamSession.phone}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <span className="px-2 py-1 rounded-lg bg-white dark:bg-[#071522] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 text-[10.5px] font-semibold text-[#0E7C7B] dark:text-[#22E3D0] whitespace-nowrap shrink-0">
+                  {isOnline ? 'Synced' : 'Offline'}
+                </span>
+              </div>
+
+              {/* Shareable Team Join Code Row */}
+              <div className="pt-3 border-t border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div className="min-w-0">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-[#0D2B45]/55 dark:text-[#EBF4FA]/55">
+                    Team Join Code
+                  </div>
+                  <p className="text-xs text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 mt-0.5">
+                    Share this secret code with teammates in your Territory so they can collaborate with you.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="px-3.5 py-2 rounded-xl bg-white dark:bg-[#071522] border border-[#0E7C7B]/30 font-mono font-extrabold text-sm sm:text-base tracking-wider text-[#0D2B45] dark:text-[#5EEAD4]">
+                    {activeJoinCode}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCopyJoinCode}
+                    className="min-h-[40px] px-3.5 rounded-xl bg-[#0E7C7B] hover:bg-[#095C5B] text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition-colors active:scale-[0.97]"
+                  >
+                    {copiedJoinCode ? (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Copied</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>Copy</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </section>
+          )}
         </div>
       )}
 
       {/* ================================================================= */}
-      {/* INVITE MEMBER MODAL (Search Firestore users by Email or Phone)    */}
+      {/* INVITE MODAL (Member Collaboration OR Superior Manager View)      */}
       {/* ================================================================= */}
       {showInviteModal && (
         <div
@@ -1817,14 +2554,30 @@ export const TeamWorkspaceView: React.FC = () => {
                   id="invite-member-title"
                   className="font-display font-bold text-lg text-[#0D2B45] dark:text-white"
                 >
-                  Invite Team Member
+                  {inviteModalMode === 'superior'
+                    ? 'Invite Superior (Manager View)'
+                    : 'Invite Team Member'}
                 </h2>
-                <p className="text-xs text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 mt-0.5">
-                  Search registered officers by Email or Phone Number to invite them to{' '}
-                  <span className="font-semibold text-[#0E7C7B] dark:text-[#22E3D0]">
-                    {teamSession.areaName}
-                  </span>
-                  .
+                <p className="text-xs text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 mt-0.5 leading-relaxed">
+                  {inviteModalMode === 'superior' ? (
+                    <>
+                      Search your Manager/Superior by Email or Phone to grant optional{' '}
+                      <strong className="text-indigo-700 dark:text-indigo-300">read-only</strong>{' '}
+                      view access to{' '}
+                      <span className="font-semibold text-[#0E7C7B] dark:text-[#22E3D0]">
+                        {activeTerritoryName}
+                      </span>
+                      . You can revoke access anytime.
+                    </>
+                  ) : (
+                    <>
+                      Search registered officers by Email or Phone Number to collaborate inside{' '}
+                      <span className="font-semibold text-[#0E7C7B] dark:text-[#22E3D0]">
+                        {activeTerritoryName}
+                      </span>
+                      .
+                    </>
+                  )}
                 </p>
               </div>
               <button
@@ -1876,11 +2629,9 @@ export const TeamWorkspaceView: React.FC = () => {
                   No registered officer found
                 </p>
                 <p className="text-[11px] text-[#0D2B45]/60 dark:text-[#EBF4FA]/60">
-                  Ask your teammate to sign in once first, or share your Join Code{' '}
-                  <span className="font-mono font-bold text-[#0E7C7B] dark:text-[#22E3D0]">
-                    {activeJoinCode}
-                  </span>
-                  .
+                  {inviteModalMode === 'superior'
+                    ? 'Ask your Superior/Manager to sign in to Field Pro – DI once first, then search their email or phone.'
+                    : `Ask your teammate to sign in once first, or share your Join Code ${activeJoinCode}.`}
                 </p>
               </div>
             )}
@@ -1888,8 +2639,15 @@ export const TeamWorkspaceView: React.FC = () => {
             {inviteSearchResults.length > 0 && (
               <div className="space-y-2">
                 {inviteSearchResults.map((officer) => {
-                  const alreadyInTeam = officer.areaId === effectiveAreaId;
-                  const sent = Boolean(sentInviteUids[officer.uid]);
+                  const alreadyInTeam =
+                    (teamMeta?.members?.includes(officer.uid) ?? false) ||
+                    (officer.teamId || officer.areaId) === ownTeamId;
+                  const alreadySuperior =
+                    (teamMeta?.superiorUids?.includes(officer.uid) ?? false) ||
+                    teamSuperiors.some((s) => s.uid === officer.uid);
+                  const alreadyGranted =
+                    inviteModalMode === 'superior' ? alreadySuperior || alreadyInTeam : alreadyInTeam;
+                  const sent = Boolean(sentInviteKeys[`${inviteModalMode}:${officer.uid}`]);
                   const sending = sendingInviteUid === officer.uid;
                   return (
                     <div
@@ -1904,17 +2662,17 @@ export const TeamWorkspaceView: React.FC = () => {
                           {officer.email}
                           {officer.phone ? ` · ${officer.phone}` : ''}
                         </div>
-                        {officer.areaName && (
+                        {(officer.territoryName || officer.areaName) && (
                           <div className="text-[11px] text-[#0E7C7B] dark:text-[#22E3D0] truncate mt-0.5">
-                            Current area: {officer.areaName}
+                            Territory: {officer.territoryName || officer.areaName}
                             {officer.district ? ` (${officer.district})` : ''}
                           </div>
                         )}
                       </div>
 
-                      {alreadyInTeam ? (
+                      {alreadyGranted ? (
                         <span className="px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-500/15 text-[11px] font-bold text-emerald-700 dark:text-emerald-300 shrink-0">
-                          In Team
+                          {alreadySuperior ? 'Has View' : 'In Team'}
                         </span>
                       ) : sent ? (
                         <span className="px-2.5 py-1 rounded-lg bg-teal-50 dark:bg-teal-500/15 text-[11px] font-bold text-[#0E7C7B] dark:text-[#22E3D0] inline-flex items-center gap-1 shrink-0">
@@ -1926,10 +2684,20 @@ export const TeamWorkspaceView: React.FC = () => {
                           type="button"
                           disabled={sending}
                           onClick={() => void handleSendInvite(officer)}
-                          className="min-h-[36px] px-3 rounded-xl bg-[#0E7C7B] hover:bg-[#095C5B] text-white text-xs font-bold inline-flex items-center gap-1 shrink-0 disabled:opacity-50 cursor-pointer"
+                          className={`min-h-[36px] px-3 rounded-xl text-white text-xs font-bold inline-flex items-center gap-1 shrink-0 disabled:opacity-50 cursor-pointer ${
+                            inviteModalMode === 'superior'
+                              ? 'bg-indigo-600 hover:bg-indigo-700'
+                              : 'bg-[#0E7C7B] hover:bg-[#095C5B]'
+                          }`}
                         >
                           <Send className="w-3.5 h-3.5" />
-                          <span>{sending ? 'Sending...' : 'Invite'}</span>
+                          <span>
+                            {sending
+                              ? 'Sending...'
+                              : inviteModalMode === 'superior'
+                                ? 'Send View Invite'
+                                : 'Invite'}
+                          </span>
                         </button>
                       )}
                     </div>
@@ -1938,21 +2706,23 @@ export const TeamWorkspaceView: React.FC = () => {
               </div>
             )}
 
-            <div className="pt-2 border-t border-[#0D2B45]/8 dark:border-[#EBF4FA]/8 flex items-center justify-between gap-2 text-xs">
-              <span className="text-[#0D2B45]/60 dark:text-[#EBF4FA]/60">
-                Or share Join Code:{' '}
-                <strong className="font-mono text-[#0D2B45] dark:text-white">
-                  {activeJoinCode}
-                </strong>
-              </span>
-              <button
-                type="button"
-                onClick={handleCopyJoinCode}
-                className="text-xs font-bold text-[#0E7C7B] dark:text-[#22E3D0] hover:underline cursor-pointer"
-              >
-                {copiedJoinCode ? 'Copied ✓' : 'Copy Code'}
-              </button>
-            </div>
+            {inviteModalMode === 'member' && (
+              <div className="pt-2 border-t border-[#0D2B45]/8 dark:border-[#EBF4FA]/8 flex items-center justify-between gap-2 text-xs">
+                <span className="text-[#0D2B45]/60 dark:text-[#EBF4FA]/60">
+                  Or share Join Code:{' '}
+                  <strong className="font-mono text-[#0D2B45] dark:text-white">
+                    {activeJoinCode}
+                  </strong>
+                </span>
+                <button
+                  type="button"
+                  onClick={handleCopyJoinCode}
+                  className="text-xs font-bold text-[#0E7C7B] dark:text-[#22E3D0] hover:underline cursor-pointer"
+                >
+                  {copiedJoinCode ? 'Copied ✓' : 'Copy Code'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1981,7 +2751,9 @@ export const TeamWorkspaceView: React.FC = () => {
                   Join Team by Code
                 </h2>
                 <p className="text-xs text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 mt-0.5">
-                  Enter a teammate&apos;s Team Join Code (e.g. <span className="font-mono font-semibold">DI-4829</span>) to immediately share Doctors, Chambers, Hospitals, and Team Members.
+                  Enter a teammate&apos;s Team Join Code (e.g.{' '}
+                  <span className="font-mono font-semibold">DI-4829</span>) to immediately share
+                  Doctors, Hospitals, Sub-Areas, and Team Members.
                 </p>
               </div>
               <button
@@ -2046,6 +2818,12 @@ export const TeamWorkspaceView: React.FC = () => {
           </div>
         </div>
       )}
+
+      <datalist id="bd-districts-list">
+        {BD_DISTRICTS.map((d) => (
+          <option key={d} value={d} />
+        ))}
+      </datalist>
     </div>
   );
 };

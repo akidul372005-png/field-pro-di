@@ -613,16 +613,16 @@ export const DashboardView: React.FC = () => {
                   iconBg: 'bg-teal-50 dark:bg-teal-500/15 text-[#0E7C7B] dark:text-[#22E3D0]',
                 },
                 {
-                  id: 'chambers' as TeamWorkspaceSubTab,
-                  label: 'Chambers',
-                  icon: MapPin,
-                  iconBg: 'bg-sky-50 dark:bg-sky-500/15 text-[#0F65B8] dark:text-sky-300',
-                },
-                {
                   id: 'hospitals' as TeamWorkspaceSubTab,
                   label: 'Hospitals',
                   icon: Building2,
                   iconBg: 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-600 dark:text-indigo-300',
+                },
+                {
+                  id: 'areas' as TeamWorkspaceSubTab,
+                  label: 'Areas',
+                  icon: MapPin,
+                  iconBg: 'bg-sky-50 dark:bg-sky-500/15 text-[#0F65B8] dark:text-sky-300',
                 },
                 {
                   id: 'team' as TeamWorkspaceSubTab,

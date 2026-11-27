@@ -46,10 +46,14 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
     startDetailingFlow,
     doctorDirectoryAreaFilter,
     setDoctorDirectoryAreaFilter,
+    doctorDirectorySubAreaFilter,
+    setDoctorDirectorySubAreaFilter,
     doctorDirectoryHospitalFilter,
     setDoctorDirectoryHospitalFilter,
     doctorDirectorySpecialtyFilter,
     setDoctorDirectorySpecialtyFilter,
+    teamSubAreas,
+    isReadOnlySuperiorView,
     openAddModal,
     openEditModal,
     requestDeleteRecord,
@@ -97,6 +101,26 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
     return { regular, guest };
   }, [scopedDoctorsBase]);
 
+  const subAreaFilterOptions = useMemo(() => {
+    const map = new Map<string, { name: string; count: number }>();
+    teamSubAreas.forEach((sa) => {
+      const name = sa.Area_Name.trim();
+      if (name) map.set(name.toLowerCase(), { name, count: 0 });
+    });
+    scopedDoctorsBase.forEach((doc) => {
+      const sub = String(doc.Sub_Area || doc.areaName || '').trim();
+      if (!sub) return;
+      const key = sub.toLowerCase();
+      const existing = map.get(key);
+      if (existing) {
+        existing.count += 1;
+      } else {
+        map.set(key, { name: sub, count: 1 });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [teamSubAreas, scopedDoctorsBase]);
+
   const filteredDoctors = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const matchedDept = doctorDirectorySpecialtyFilter
@@ -110,6 +134,10 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
     return scopedDoctorsBase.filter((doc) => {
       if (!isSingleAreaScoped && doctorDirectoryAreaFilter && doc.Area_ID !== doctorDirectoryAreaFilter)
         return false;
+      if (doctorDirectorySubAreaFilter) {
+        const docSub = String(doc.Sub_Area || doc.areaName || '').trim().toLowerCase();
+        if (docSub !== doctorDirectorySubAreaFilter.trim().toLowerCase()) return false;
+      }
       if (doctorDirectoryHospitalFilter && doc.Primary_Hospital_ID !== doctorDirectoryHospitalFilter)
         return false;
       if (doctorDirectorySpecialtyFilter) {
@@ -124,6 +152,7 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
         hospitalMap.get(doc.Primary_Hospital_ID)?.Hospital_Name ?? ''
       ).toLowerCase();
       const areaName = String(areaMap.get(doc.Area_ID)?.Area_Name ?? '').toLowerCase();
+      const subAreaName = String(doc.Sub_Area || doc.areaName || '').toLowerCase();
       const deptName = String(
         departmentMap.get(doc.Department_ID)?.Department_Name ?? ''
       ).toLowerCase();
@@ -137,6 +166,7 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
         deptName.includes(q) ||
         hospName.includes(q) ||
         areaName.includes(q) ||
+        subAreaName.includes(q) ||
         docType.includes(q) ||
         schedule.days.toLowerCase().includes(q) ||
         schedule.hours.toLowerCase().includes(q) ||
@@ -150,6 +180,7 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
     dataset.Chambers,
     searchQuery,
     doctorDirectoryAreaFilter,
+    doctorDirectorySubAreaFilter,
     doctorDirectoryHospitalFilter,
     doctorDirectorySpecialtyFilter,
     doctorTypeFilter,
@@ -160,6 +191,7 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
 
   const activeFilterCount =
     (doctorDirectoryAreaFilter ? 1 : 0) +
+    (doctorDirectorySubAreaFilter ? 1 : 0) +
     (doctorDirectoryHospitalFilter ? 1 : 0) +
     (doctorDirectorySpecialtyFilter ? 1 : 0) +
     (doctorTypeFilter ? 1 : 0) +
@@ -208,6 +240,7 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
   const resetFilters = () => {
     setSearchQuery('');
     setDoctorDirectoryAreaFilter('');
+    setDoctorDirectorySubAreaFilter('');
     setDoctorDirectoryHospitalFilter('');
     setDoctorDirectorySpecialtyFilter('');
     setDoctorTypeFilter('');
@@ -238,29 +271,34 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
               Clear filters ({activeFilterCount})
             </button>
           )}
-          <button
-            type="button"
-            onClick={() =>
-              openAddModal(
-                'Doctors',
-                isSingleAreaScoped ? { Area_ID: areaScopeId } : undefined
-              )
-            }
-            className="min-h-[44px] px-4 py-2 rounded-xl bg-[#0D2B45] hover:bg-[#133859] dark:bg-[#0E7C7B] dark:hover:bg-[#149A99] text-white text-sm font-semibold inline-flex items-center gap-2 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Add Doctor</span>
-          </button>
+          {!isReadOnlySuperiorView && (
+            <button
+              type="button"
+              onClick={() =>
+                openAddModal(
+                  'Doctors',
+                  isSingleAreaScoped
+                    ? {
+                        Area_ID: areaScopeId,
+                        ...(doctorDirectorySubAreaFilter
+                          ? { Sub_Area: doctorDirectorySubAreaFilter }
+                          : {}),
+                      }
+                    : undefined
+                )
+              }
+              className="min-h-[44px] px-4 py-2 rounded-xl bg-[#0D2B45] hover:bg-[#133859] dark:bg-[#0E7C7B] dark:hover:bg-[#149A99] text-white text-sm font-semibold inline-flex items-center gap-2 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Add Doctor</span>
+            </button>
+          )}
         </div>
       </div>
 
       {/* Filter Toolbar */}
       <div className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-4 space-y-3">
-        <div
-          className={`grid grid-cols-1 sm:grid-cols-2 ${
-            isSingleAreaScoped ? 'lg:grid-cols-3' : 'lg:grid-cols-4'
-          } gap-3`}
-        >
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {/* Directory Search */}
           <div className="relative">
             <Search
@@ -271,14 +309,28 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
               type="search"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Filter by name, degree, chamber..."
-              aria-label="Filter doctors by name, degree, chamber, or phone"
+              placeholder="Filter by name, degree, sub-area..."
+              aria-label="Filter doctors by name, degree, sub-area, or phone"
               className="w-full min-h-[44px] pl-9 pr-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-base md:text-sm text-[#0D2B45] dark:text-white placeholder:text-[#0D2B45]/45 dark:placeholder:text-[#EBF4FA]/40 focus:outline-none focus:border-[#0E7C7B]"
             />
           </div>
 
-          {/* Area Filter (shown only when viewing All Areas) */}
-          {!isSingleAreaScoped && (
+          {/* Sub-Area Filter (Team Territory mode) or Area Filter */}
+          {isSingleAreaScoped ? (
+            <select
+              value={doctorDirectorySubAreaFilter}
+              onChange={(e) => setDoctorDirectorySubAreaFilter(e.target.value)}
+              aria-label="Filter by Sub-Area"
+              className="w-full min-h-[44px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-base md:text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+            >
+              <option value="">All Sub-Areas ({subAreaFilterOptions.length})</option>
+              {subAreaFilterOptions.map((opt) => (
+                <option key={opt.name} value={opt.name}>
+                  {opt.name} ({opt.count})
+                </option>
+              ))}
+            </select>
+          ) : (
             <select
               value={doctorDirectoryAreaFilter}
               onChange={(e) => setDoctorDirectoryAreaFilter(e.target.value)}
@@ -452,7 +504,9 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
                     </div>
                     <div className="flex items-center gap-1.5">
                       <MapPin className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#149A99] shrink-0" />
-                      <span className="truncate">{area?.Area_Name || doc.Area_ID || '—'}</span>
+                      <span className="truncate font-medium text-[#0D2B45] dark:text-[#EBF4FA]">
+                        {doc.Sub_Area || doc.areaName || area?.Area_Name || '—'}
+                      </span>
                     </div>
                     {(schedule.days || schedule.hours) && (
                       <div className="pt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[#0D2B45]/80 dark:text-[#EBF4FA]/80">
@@ -479,34 +533,38 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
                     {doc.Phone ? ` · ${doc.Phone}` : ''}
                   </span>
                   <div className="flex items-center gap-1.5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openEditModal('Doctors', doc as unknown as Record<string, unknown>);
-                      }}
-                      aria-label={`Edit ${doc.Doctor_Name}`}
-                      title="Edit doctor"
-                      className="min-h-[44px] min-w-[44px] sm:min-h-[36px] sm:min-w-[36px] flex items-center justify-center rounded-xl sm:rounded-lg text-[#0D2B45]/65 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/65 dark:hover:text-[#149A99] hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/60"
-                    >
-                      <Pencil className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        requestDeleteRecord(
-                          'Doctors',
-                          doc as unknown as Record<string, unknown>,
-                          doc.Doctor_Name
-                        );
-                      }}
-                      aria-label={`Delete ${doc.Doctor_Name}`}
-                      title="Delete doctor"
-                      className="min-h-[44px] min-w-[44px] sm:min-h-[36px] sm:min-w-[36px] flex items-center justify-center rounded-xl sm:rounded-lg text-[#0D2B45]/55 hover:text-rose-600 dark:text-[#EBF4FA]/55 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40"
-                    >
-                      <Trash2 className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
-                    </button>
+                    {!isReadOnlySuperiorView && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openEditModal('Doctors', doc as unknown as Record<string, unknown>);
+                          }}
+                          aria-label={`Edit ${doc.Doctor_Name}`}
+                          title="Edit doctor"
+                          className="min-h-[44px] min-w-[44px] sm:min-h-[36px] sm:min-w-[36px] flex items-center justify-center rounded-xl sm:rounded-lg text-[#0D2B45]/65 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/65 dark:hover:text-[#149A99] hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/60"
+                        >
+                          <Pencil className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            requestDeleteRecord(
+                              'Doctors',
+                              doc as unknown as Record<string, unknown>,
+                              doc.Doctor_Name
+                            );
+                          }}
+                          aria-label={`Delete ${doc.Doctor_Name}`}
+                          title="Delete doctor"
+                          className="min-h-[44px] min-w-[44px] sm:min-h-[36px] sm:min-w-[36px] flex items-center justify-center rounded-xl sm:rounded-lg text-[#0D2B45]/55 hover:text-rose-600 dark:text-[#EBF4FA]/55 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                        >
+                          <Trash2 className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
+                        </button>
+                      </>
+                    )}
                     <button
                       type="button"
                       onClick={(e) => {
@@ -548,32 +606,34 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
                 <ArrowLeft className="w-5 h-5" />
                 <span>Back</span>
               </button>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() =>
-                    openEditModal('Doctors', selectedDoctor as unknown as Record<string, unknown>)
-                  }
-                  aria-label={`Edit ${selectedDoctor.Doctor_Name}`}
-                  className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-white/85 hover:bg-white/10"
-                >
-                  <Pencil className="w-4 h-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    requestDeleteRecord(
-                      'Doctors',
-                      selectedDoctor as unknown as Record<string, unknown>,
-                      selectedDoctor.Doctor_Name
-                    )
-                  }
-                  aria-label={`Delete ${selectedDoctor.Doctor_Name}`}
-                  className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-rose-300 hover:bg-white/10"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
+              {!isReadOnlySuperiorView && (
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openEditModal('Doctors', selectedDoctor as unknown as Record<string, unknown>)
+                    }
+                    aria-label={`Edit ${selectedDoctor.Doctor_Name}`}
+                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-white/85 hover:bg-white/10"
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      requestDeleteRecord(
+                        'Doctors',
+                        selectedDoctor as unknown as Record<string, unknown>,
+                        selectedDoctor.Doctor_Name
+                      )
+                    }
+                    aria-label={`Delete ${selectedDoctor.Doctor_Name}`}
+                    className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl text-rose-300 hover:bg-white/10"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Modal Header */}
@@ -605,32 +665,36 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
                 </p>
               </div>
               <div className="hidden sm:flex items-center gap-1 shrink-0">
-                <button
-                  type="button"
-                  onClick={() =>
-                    openEditModal('Doctors', selectedDoctor as unknown as Record<string, unknown>)
-                  }
-                  aria-label={`Edit ${selectedDoctor.Doctor_Name}`}
-                  title="Edit doctor"
-                  className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-[#0D2B45]/60 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/60 dark:hover:text-[#149A99] hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/50"
-                >
-                  <Pencil className="w-4 h-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    requestDeleteRecord(
-                      'Doctors',
-                      selectedDoctor as unknown as Record<string, unknown>,
-                      selectedDoctor.Doctor_Name
-                    )
-                  }
-                  aria-label={`Delete ${selectedDoctor.Doctor_Name}`}
-                  title="Delete doctor"
-                  className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-[#0D2B45]/55 hover:text-rose-600 dark:text-[#EBF4FA]/55 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
+                {!isReadOnlySuperiorView && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openEditModal('Doctors', selectedDoctor as unknown as Record<string, unknown>)
+                      }
+                      aria-label={`Edit ${selectedDoctor.Doctor_Name}`}
+                      title="Edit doctor"
+                      className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-[#0D2B45]/60 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/60 dark:hover:text-[#149A99] hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/50"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        requestDeleteRecord(
+                          'Doctors',
+                          selectedDoctor as unknown as Record<string, unknown>,
+                          selectedDoctor.Doctor_Name
+                        )
+                      }
+                      aria-label={`Delete ${selectedDoctor.Doctor_Name}`}
+                      title="Delete doctor"
+                      className="min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-[#0D2B45]/55 hover:text-rose-600 dark:text-[#EBF4FA]/55 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </>
+                )}
                 <button
                   type="button"
                   onClick={() => setSelectedDoctorId(null)}
@@ -645,7 +709,7 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
             {/* Scrollable Body */}
             <div className="flex-1 overflow-y-auto px-4 sm:px-5 py-5 pb-10 pb-safe space-y-6">
               {/* Primary Actions */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className={`grid ${isReadOnlySuperiorView ? 'grid-cols-1' : 'grid-cols-2'} gap-3`}>
                 <button
                   type="button"
                   onClick={() => {
@@ -658,19 +722,18 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
                   <Pill className="w-4 h-4" />
                   <span>Detailing Guide</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    openAddModal('Chambers', {
-                      Doctor_ID: selectedDoctor.Doctor_ID,
-                      Area_ID: selectedDoctor.Area_ID,
-                    })
-                  }
-                  className="min-h-[44px] px-4 py-2.5 rounded-xl bg-[#EBF4FA] dark:bg-[#133859] text-[#0D2B45] dark:text-white hover:bg-[#dcecf7] dark:hover:bg-[#1C4A73] text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors"
-                >
-                  <Plus className="w-4 h-4 text-[#0E7C7B] dark:text-[#149A99]" />
-                  <span>Add Chamber</span>
-                </button>
+                {!isReadOnlySuperiorView && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openEditModal('Doctors', selectedDoctor as unknown as Record<string, unknown>)
+                    }
+                    className="min-h-[44px] px-4 py-2.5 rounded-xl bg-[#EBF4FA] dark:bg-[#133859] text-[#0D2B45] dark:text-white hover:bg-[#dcecf7] dark:hover:bg-[#1C4A73] text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors"
+                  >
+                    <Pencil className="w-4 h-4 text-[#0E7C7B] dark:text-[#149A99]" />
+                    <span>Edit Doctor</span>
+                  </button>
+                )}
               </div>
 
               {/* Affiliation, Hospital / Chamber & Visiting Schedule */}
@@ -696,9 +759,15 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
                 <div className="flex items-center gap-2.5 text-xs text-[#0D2B45]/75 dark:text-[#EBF4FA]/75">
                   <MapPin className="w-4 h-4 text-[#0E7C7B] dark:text-[#149A99] shrink-0" />
                   <span>
-                    {areaMap.get(selectedDoctor.Area_ID)?.Area_Name || selectedDoctor.Area_ID}
-                    {areaMap.get(selectedDoctor.Area_ID)?.Zone
-                      ? ` · ${areaMap.get(selectedDoctor.Area_ID)?.Zone}`
+                    <strong className="text-[#0D2B45] dark:text-white">
+                      {selectedDoctor.Sub_Area ||
+                        selectedDoctor.areaName ||
+                        areaMap.get(selectedDoctor.Area_ID)?.Area_Name ||
+                        '—'}
+                    </strong>
+                    {areaMap.get(selectedDoctor.Area_ID)?.Area_Name &&
+                    (selectedDoctor.Sub_Area || selectedDoctor.areaName)
+                      ? ` · ${areaMap.get(selectedDoctor.Area_ID)?.Area_Name}`
                       : ''}
                   </span>
                 </div>

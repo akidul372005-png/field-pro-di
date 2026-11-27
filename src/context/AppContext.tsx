@@ -26,6 +26,9 @@ import {
   SheetName,
   TeamInvite,
   TeamSession,
+  TeamSubArea,
+  TeamSuperior,
+  TeamWorkspaceMeta,
   ToastNotification,
 } from '../types';
 import { auth, testFirestoreConnection } from '../lib/firebase';
@@ -40,6 +43,7 @@ import {
   deleteAreaHospital,
   deleteAreaMember,
   deleteAreaNote,
+  deleteTeamSubArea,
   ensureAreaJoinCodeRegistered,
   fetchUserProfileFromFirestore,
   formatFirebaseAuthError,
@@ -48,11 +52,13 @@ import {
   profileToTeamSession,
   registerTeamUserWithFirebase,
   resolveGoogleRedirectResult,
+  revokeSuperiorAccess,
   saveAreaChamber,
   saveAreaDoctor,
   saveAreaHospital,
   saveAreaMember,
   saveAreaNote,
+  saveTeamSubArea,
   saveUserAndAreaDocs,
   searchRegisteredOfficers,
   sendTeamInvite,
@@ -61,6 +67,8 @@ import {
   signOutTeamUserFromFirebase,
   subscribeToAreaWorkspace,
   subscribeToIncomingInvites,
+  subscribeToSuperiorTeams,
+  updateTeamTerritoryName,
 } from '../services/firebaseTeam';
 import {
   DEFAULT_API_URL,
@@ -103,7 +111,7 @@ import {
   setupSuperAdminPasscodeOnServer,
 } from '../services/api';
 
-export type TeamWorkspaceSubTab = 'doctors' | 'chambers' | 'hospitals' | 'team';
+export type TeamWorkspaceSubTab = 'doctors' | 'hospitals' | 'areas' | 'team';
 
 const MASTER_DATA_SHEETS = new Set<string>([
   'Products',
@@ -155,6 +163,15 @@ interface AppContextValue {
   clearGoogleRedirectError: () => void;
   areaNotes: AreaNote[];
   pendingInvites: TeamInvite[];
+  teamMeta: TeamWorkspaceMeta | null;
+  teamSubAreas: TeamSubArea[];
+  teamSuperiors: TeamSuperior[];
+  superiorAccessibleTeams: TeamWorkspaceMeta[];
+  activeViewingTeamId: string | null;
+  setActiveViewingTeamId: (teamId: string | null) => void;
+  isReadOnlySuperiorView: boolean;
+  effectiveTeamId: string;
+  activeTerritoryName: string;
   teamPinConfigured: boolean;
   loginTeamWithGoogle: () => Promise<{ ok: boolean; redirected?: boolean; error?: string }>;
   loginTeamWithFirebase: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
@@ -164,10 +181,27 @@ interface AppContextValue {
   completeFirebaseAreaProfile: (
     input: Omit<TeamRegistrationInput, 'email' | 'password'>
   ) => Promise<{ ok: boolean; error?: string }>;
+  updateTerritoryName: (
+    territoryName: string,
+    district?: string,
+    upazila?: string
+  ) => Promise<{ ok: boolean; error?: string }>;
+  saveSubArea: (input: {
+    SubArea_ID?: string;
+    Area_Name: string;
+    Market_Type?: string;
+    Notes?: string;
+    Created_At?: string;
+  }) => Promise<{ ok: boolean; subArea?: TeamSubArea; error?: string }>;
+  deleteSubArea: (subAreaId: string) => Promise<{ ok: boolean; error?: string }>;
   searchTeamOfficers: (
     queryText: string
   ) => Promise<{ ok: boolean; results: OfficerSearchResult[]; error?: string }>;
-  sendOfficerTeamInvite: (recipient: OfficerSearchResult) => Promise<{ ok: boolean; error?: string }>;
+  sendOfficerTeamInvite: (
+    recipient: OfficerSearchResult,
+    inviteType?: 'member' | 'superior'
+  ) => Promise<{ ok: boolean; error?: string }>;
+  revokeTeamSuperior: (superiorUid: string) => Promise<{ ok: boolean; error?: string }>;
   acceptIncomingInvite: (invite: TeamInvite) => Promise<{ ok: boolean; error?: string }>;
   declineIncomingInvite: (inviteId: string) => Promise<{ ok: boolean; error?: string }>;
   joinTeamWithCode: (code: string) => Promise<{ ok: boolean; error?: string }>;
@@ -251,6 +285,10 @@ interface AppContextValue {
   setDoctorDirectoryHospitalFilter: (hospitalId: string) => void;
   doctorDirectoryAreaFilter: string;
   setDoctorDirectoryAreaFilter: (areaId: string) => void;
+  doctorDirectorySubAreaFilter: string;
+  setDoctorDirectorySubAreaFilter: (subAreaName: string) => void;
+  hospitalDirectorySubAreaFilter: string;
+  setHospitalDirectorySubAreaFilter: (subAreaName: string) => void;
   doctorDirectorySpecialtyFilter: string;
   setDoctorDirectorySpecialtyFilter: (specialty: string) => void;
 
@@ -368,6 +406,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [firebaseChambers, setFirebaseChambers] = useState<Chamber[]>([]);
   const [firebaseHospitals, setFirebaseHospitals] = useState<Hospital[]>([]);
   const [firebaseMembers, setFirebaseMembers] = useState<MPOUser[]>([]);
+  const [teamMeta, setTeamMeta] = useState<TeamWorkspaceMeta | null>(null);
+  const [teamSubAreas, setTeamSubAreas] = useState<TeamSubArea[]>([]);
+  const [teamSuperiors, setTeamSuperiors] = useState<TeamSuperior[]>([]);
+  const [superiorAccessibleTeams, setSuperiorAccessibleTeams] = useState<TeamWorkspaceMeta[]>([]);
+  const [activeViewingTeamId, setActiveViewingTeamIdState] = useState<string | null>(null);
   const [areaNotes, setAreaNotes] = useState<AreaNote[]>([]);
   const [pendingInvites, setPendingInvites] = useState<TeamInvite[]>([]);
 
@@ -419,6 +462,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   } | null>(null);
   const [doctorDirectoryHospitalFilter, setDoctorDirectoryHospitalFilter] = useState('');
   const [doctorDirectoryAreaFilter, setDoctorDirectoryAreaFilter] = useState('');
+  const [doctorDirectorySubAreaFilter, setDoctorDirectorySubAreaFilter] = useState('');
+  const [hospitalDirectorySubAreaFilter, setHospitalDirectorySubAreaFilter] = useState('');
   const [doctorDirectorySpecialtyFilter, setDoctorDirectorySpecialtyFilter] = useState('');
 
   const syncInFlightRef = useRef(false);
@@ -515,15 +560,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     saveActiveMpoId(mpoId);
   }, []);
 
-  // Keep Public Dashboard strictly from Google Sheets while scoping Team records strictly to Firestore areas/{areaId}
+  const ownTeamId = firebaseProfile?.teamId || firebaseProfile?.areaId || '';
+  const isReadOnlySuperiorView = Boolean(
+    activeViewingTeamId && ownTeamId && activeViewingTeamId !== ownTeamId
+  );
+  const effectiveTeamId = isReadOnlySuperiorView && activeViewingTeamId ? activeViewingTeamId : ownTeamId;
+
+  const activeSuperiorTeamMeta = useMemo(
+    () =>
+      isReadOnlySuperiorView
+        ? superiorAccessibleTeams.find((t) => t.teamId === activeViewingTeamId) || null
+        : null,
+    [isReadOnlySuperiorView, superiorAccessibleTeams, activeViewingTeamId]
+  );
+
+  const activeTerritoryName =
+    activeSuperiorTeamMeta?.territoryName ||
+    (teamMeta?.teamId === effectiveTeamId ? teamMeta.territoryName : '') ||
+    firebaseProfile?.territoryName ||
+    firebaseProfile?.areaName ||
+    teamSession?.territoryName ||
+    teamSession?.areaName ||
+    '';
+
+  const setActiveViewingTeamId = useCallback((nextTeamId: string | null) => {
+    startTransition(() => {
+      setActiveViewingTeamIdState(nextTeamId);
+      setSelectedDoctorId(null);
+      setDoctorDirectoryHospitalFilter('');
+      setDoctorDirectorySubAreaFilter('');
+      setHospitalDirectorySubAreaFilter('');
+    });
+  }, []);
+
+  // Keep Public Dashboard strictly from Google Sheets while scoping Team records strictly to Firestore teams/{teamId}
   const dataset = useMemo<FieldDataset>(() => {
-    if (teamSession?.loginMode === 'firebase' && firebaseProfile) {
+    if (teamSession?.loginMode === 'firebase' && firebaseProfile && effectiveTeamId) {
       const firebaseAreaRecord: Area = {
-        Area_ID: firebaseProfile.areaId,
-        Area_Name: firebaseProfile.areaName,
-        District: firebaseProfile.district,
-        Zone: firebaseProfile.upazila || firebaseProfile.district,
-        Territory: firebaseProfile.upazila || firebaseProfile.district,
+        Area_ID: effectiveTeamId,
+        Area_Name: activeTerritoryName || firebaseProfile.territoryName || firebaseProfile.areaName,
+        District: activeSuperiorTeamMeta?.district || teamMeta?.district || firebaseProfile.district,
+        Zone:
+          activeSuperiorTeamMeta?.upazila ||
+          teamMeta?.upazila ||
+          firebaseProfile.upazila ||
+          firebaseProfile.district,
+        Territory:
+          activeSuperiorTeamMeta?.upazila ||
+          teamMeta?.upazila ||
+          firebaseProfile.upazila ||
+          firebaseProfile.district,
         Status: 'Active',
       };
       return {
@@ -540,6 +626,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     sheetDataset,
     teamSession?.loginMode,
     firebaseProfile,
+    effectiveTeamId,
+    activeTerritoryName,
+    activeSuperiorTeamMeta,
+    teamMeta,
     firebaseDoctors,
     firebaseChambers,
     firebaseHospitals,
@@ -592,6 +682,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setFirebaseChambers([]);
         setFirebaseHospitals([]);
         setFirebaseMembers([]);
+        setTeamMeta(null);
+        setTeamSubAreas([]);
+        setTeamSuperiors([]);
+        setSuperiorAccessibleTeams([]);
+        setActiveViewingTeamIdState(null);
         setAreaNotes([]);
         setPendingInvites([]);
         setFirebaseSyncError(null);
@@ -646,21 +741,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [setActiveTab]);
 
-  // Real-time Firestore subscriptions strictly scoped to areas/{areaId} (works offline via IndexedDB cache)
+  // Real-time Firestore subscriptions strictly scoped to teams/{teamId} (works offline via IndexedDB cache)
   useEffect(() => {
-    if (!firebaseUser || !firebaseProfile?.areaId) {
+    if (!firebaseUser || !effectiveTeamId) {
       return;
     }
 
     setFirebaseSyncError(null);
-    const unsub = subscribeToAreaWorkspace(firebaseProfile.areaId, {
+    const unsub = subscribeToAreaWorkspace(effectiveTeamId, {
+      onMeta: (meta) => {
+        setTeamMeta(meta);
+        // If viewing own team and a teammate updated the Territory Name, sync it live into session/profile
+        if (
+          meta &&
+          !isReadOnlySuperiorView &&
+          firebaseProfileRef.current &&
+          meta.teamId === (firebaseProfileRef.current.teamId || firebaseProfileRef.current.areaId) &&
+          meta.territoryName &&
+          meta.territoryName !== firebaseProfileRef.current.territoryName
+        ) {
+          const syncedProfile: FirebaseUserProfile = {
+            ...firebaseProfileRef.current,
+            territoryName: meta.territoryName,
+            areaName: meta.territoryName,
+            district: meta.district || firebaseProfileRef.current.district,
+            upazila: meta.upazila || firebaseProfileRef.current.upazila,
+            joinCode: meta.joinCode || firebaseProfileRef.current.joinCode,
+          };
+          firebaseProfileRef.current = syncedProfile;
+          setFirebaseProfile(syncedProfile);
+          const nextSession = profileToTeamSession(syncedProfile);
+          setTeamSession(nextSession);
+          saveTeamSession(nextSession);
+        }
+      },
       onDoctors: (rows) => {
         setFirebaseDoctors(rows);
         setFirebaseSyncError(null);
       },
       onChambers: (rows) => setFirebaseChambers(rows),
       onHospitals: (rows) => setFirebaseHospitals(rows),
+      onSubAreas: (rows) => setTeamSubAreas(rows),
       onMembers: (rows) => setFirebaseMembers(rows),
+      onSuperiors: (rows) => setTeamSuperiors(rows),
       onNotes: (rows) => setAreaNotes(rows),
       onError: (msg) => setFirebaseSyncError(msg),
     });
@@ -668,15 +791,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => {
       unsub();
     };
-  }, [firebaseUser, firebaseProfile?.areaId]);
+  }, [firebaseUser, effectiveTeamId, isReadOnlySuperiorView]);
 
-  // Ensure the active area has its short Join Code (e.g. DI-4829) registered in Firestore
+  // Subscribe to any Teams that have granted this officer Superior (Manager View) access
   useEffect(() => {
-    if (!firebaseUser || !firebaseProfile?.areaId) return;
+    if (!firebaseUser?.uid) {
+      setSuperiorAccessibleTeams([]);
+      return;
+    }
+    const unsub = subscribeToSuperiorTeams(firebaseUser.uid, (teams) => {
+      setSuperiorAccessibleTeams(teams);
+      setActiveViewingTeamIdState((prev) => {
+        if (prev && !teams.some((t) => t.teamId === prev)) {
+          pushToast({
+            type: 'info',
+            title: 'Manager View Access ended',
+            message: 'Returned to your private Territory workspace.',
+          });
+          return null;
+        }
+        return prev;
+      });
+    });
+    return () => {
+      unsub();
+    };
+  }, [firebaseUser?.uid, pushToast]);
+
+  // Ensure the officer's own team has its teams/{teamId} doc & short Join Code registered in Firestore
+  useEffect(() => {
+    if (!firebaseUser || !firebaseProfile?.teamId) return;
     void ensureAreaJoinCodeRegistered(firebaseProfile);
   }, [firebaseUser, firebaseProfile]);
 
-  // Live subscription to incoming Team Invites for the logged-in officer
+  // Live subscription to incoming Team & Superior Invites for the logged-in officer
   useEffect(() => {
     if (!firebaseUser?.uid) {
       setPendingInvites([]);
@@ -833,6 +981,106 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [pushToast]
   );
 
+  const updateTerritoryName = useCallback(
+    async (
+      territoryName: string,
+      district?: string,
+      upazila?: string
+    ): Promise<{ ok: boolean; error?: string }> => {
+      const activeProfile = firebaseProfileRef.current;
+      if (!firebaseUser || !activeProfile) {
+        return { ok: false, error: 'Please sign in first.' };
+      }
+      if (isReadOnlySuperiorView) {
+        return { ok: false, error: 'Manager View is read-only.' };
+      }
+      try {
+        const updated = await updateTeamTerritoryName({
+          profile: activeProfile,
+          territoryName,
+          district,
+          upazila,
+        });
+        firebaseProfileRef.current = updated;
+        setFirebaseProfile(updated);
+        const nextSession = profileToTeamSession(updated);
+        setTeamSession(nextSession);
+        saveTeamSession(nextSession);
+        pushToast({
+          type: 'success',
+          title: 'Territory updated',
+          message: `Now displaying "${updated.territoryName}".`,
+        });
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: formatFirebaseAuthError(err) };
+      }
+    },
+    [firebaseUser, isReadOnlySuperiorView, pushToast]
+  );
+
+  const saveSubArea = useCallback(
+    async (input: {
+      SubArea_ID?: string;
+      Area_Name: string;
+      Market_Type?: string;
+      Notes?: string;
+      Created_At?: string;
+    }): Promise<{ ok: boolean; subArea?: TeamSubArea; error?: string }> => {
+      const activeProfile = firebaseProfileRef.current;
+      if (!firebaseUser || !activeProfile) {
+        return { ok: false, error: 'Please sign in first.' };
+      }
+      if (isReadOnlySuperiorView) {
+        pushToast({
+          type: 'warning',
+          title: 'Manager View (Read-Only)',
+          message: 'Switch back to My Territory to add or edit Sub-Areas.',
+        });
+        return { ok: false, error: 'Manager View is read-only.' };
+      }
+      try {
+        const saved = await saveTeamSubArea(
+          activeProfile.teamId || activeProfile.areaId,
+          input,
+          firebaseUser.uid
+        );
+        pushToast({
+          type: 'success',
+          title: input.SubArea_ID ? 'Sub-Area updated' : 'Sub-Area added',
+          message: saved.Area_Name,
+        });
+        return { ok: true, subArea: saved };
+      } catch (err) {
+        return { ok: false, error: formatFirebaseAuthError(err) };
+      }
+    },
+    [firebaseUser, isReadOnlySuperiorView, pushToast]
+  );
+
+  const deleteSubArea = useCallback(
+    async (subAreaId: string): Promise<{ ok: boolean; error?: string }> => {
+      const activeProfile = firebaseProfileRef.current;
+      if (!firebaseUser || !activeProfile) {
+        return { ok: false, error: 'Please sign in first.' };
+      }
+      if (isReadOnlySuperiorView) {
+        return { ok: false, error: 'Manager View is read-only.' };
+      }
+      try {
+        await deleteTeamSubArea(activeProfile.teamId || activeProfile.areaId, subAreaId);
+        pushToast({
+          type: 'info',
+          title: 'Sub-Area removed',
+        });
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: formatFirebaseAuthError(err) };
+      }
+    },
+    [firebaseUser, isReadOnlySuperiorView, pushToast]
+  );
+
   const searchTeamOfficers = useCallback(
     async (
       queryText: string
@@ -851,23 +1099,63 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const sendOfficerTeamInvite = useCallback(
-    async (recipient: OfficerSearchResult): Promise<{ ok: boolean; error?: string }> => {
+    async (
+      recipient: OfficerSearchResult,
+      inviteType: 'member' | 'superior' = 'member'
+    ): Promise<{ ok: boolean; error?: string }> => {
       if (!firebaseUser || !firebaseProfile) {
-        return { ok: false, error: 'Complete your Area Profile first before sending invites.' };
+        return { ok: false, error: 'Complete your Territory Profile first before sending invites.' };
+      }
+      if (isReadOnlySuperiorView) {
+        return { ok: false, error: 'Switch to My Territory to send invites.' };
       }
       try {
-        await sendTeamInvite({ recipient, senderProfile: firebaseProfile });
+        await sendTeamInvite({ recipient, senderProfile: firebaseProfile, inviteType });
         pushToast({
           type: 'success',
-          title: `Invite sent to ${recipient.officerName}`,
-          message: `They will receive a live Team notification to join ${firebaseProfile.areaName}.`,
+          title:
+            inviteType === 'superior'
+              ? `Manager View invite sent to ${recipient.officerName}`
+              : `Team invite sent to ${recipient.officerName}`,
+          message:
+            inviteType === 'superior'
+              ? `Once accepted, they can view ${firebaseProfile.territoryName} in read-only mode (revocable anytime).`
+              : `They will receive a live notification to join ${firebaseProfile.territoryName}.`,
         });
         return { ok: true };
       } catch (err) {
         return { ok: false, error: formatFirebaseAuthError(err) };
       }
     },
-    [firebaseUser, firebaseProfile, pushToast]
+    [firebaseUser, firebaseProfile, isReadOnlySuperiorView, pushToast]
+  );
+
+  const revokeTeamSuperior = useCallback(
+    async (superiorUid: string): Promise<{ ok: boolean; error?: string }> => {
+      const activeProfile = firebaseProfileRef.current;
+      if (!firebaseUser || !activeProfile) {
+        return { ok: false, error: 'Please sign in first.' };
+      }
+      if (isReadOnlySuperiorView) {
+        return { ok: false, error: 'Manager View is read-only.' };
+      }
+      try {
+        await revokeSuperiorAccess(
+          activeProfile.teamId || activeProfile.areaId,
+          superiorUid,
+          firebaseUser.uid
+        );
+        pushToast({
+          type: 'info',
+          title: 'Superior access revoked',
+          message: 'Manager can no longer view your Territory data.',
+        });
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, error: formatFirebaseAuthError(err) };
+      }
+    },
+    [firebaseUser, isReadOnlySuperiorView, pushToast]
   );
 
   const acceptIncomingInvite = useCallback(
@@ -878,22 +1166,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { ok: false, error: 'Please sign in again first.' };
       }
       if (!activeProfile) {
-        return { ok: false, error: 'Complete your Area Profile first before accepting invites.' };
+        return { ok: false, error: 'Complete your Territory Profile first before accepting invites.' };
       }
       try {
-        const updated = await acceptTeamInvite(current, activeProfile, invite);
+        const result = await acceptTeamInvite(current, activeProfile, invite);
         authSeqRef.current += 1;
-        firebaseProfileRef.current = updated;
-        setFirebaseProfile(updated);
-        const nextSession = profileToTeamSession(updated);
-        setTeamSession(nextSession);
-        saveTeamSession(nextSession);
         setPendingInvites((prev) => prev.filter((item) => item.inviteId !== invite.inviteId));
-        pushToast({
-          type: 'success',
-          title: `Joined ${updated.areaName}`,
-          message: 'Shared Doctors, Chambers, Hospitals & Team Members are now synced.',
-        });
+
+        if (result.mode === 'superior') {
+          pushToast({
+            type: 'success',
+            title: `Manager View unlocked: ${result.targetTerritoryName}`,
+            message: 'You can now inspect this team in read-only mode while keeping your own Territory.',
+          });
+        } else {
+          firebaseProfileRef.current = result.profile;
+          setFirebaseProfile(result.profile);
+          const nextSession = profileToTeamSession(result.profile);
+          setTeamSession(nextSession);
+          saveTeamSession(nextSession);
+          setActiveViewingTeamIdState(null);
+          pushToast({
+            type: 'success',
+            title: `Joined ${result.profile.territoryName}`,
+            message: 'Shared Doctors, Hospitals, Sub-Areas & Team Members are now synced.',
+          });
+        }
         return { ok: true };
       } catch (err) {
         return { ok: false, error: formatFirebaseAuthError(err) };
@@ -927,7 +1225,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { ok: false, error: 'Please sign in again first.' };
       }
       if (!activeProfile) {
-        return { ok: false, error: 'Complete your Area Profile first before joining a team.' };
+        return { ok: false, error: 'Complete your Territory Profile first before joining a team.' };
       }
       try {
         const updated = await joinTeamByCode(current, activeProfile, code);
@@ -937,10 +1235,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const nextSession = profileToTeamSession(updated);
         setTeamSession(nextSession);
         saveTeamSession(nextSession);
+        setActiveViewingTeamIdState(null);
         pushToast({
           type: 'success',
-          title: `Joined ${updated.areaName}`,
-          message: `Connected via Join Code ${updated.joinCode}. Shared area records are now live.`,
+          title: `Joined ${updated.territoryName}`,
+          message: `Connected via Join Code ${updated.joinCode}. Shared territory records are now live.`,
         });
         return { ok: true };
       } catch (err) {
@@ -1071,6 +1370,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setFirebaseChambers([]);
     setFirebaseHospitals([]);
     setFirebaseMembers([]);
+    setTeamMeta(null);
+    setTeamSubAreas([]);
+    setTeamSuperiors([]);
+    setSuperiorAccessibleTeams([]);
+    setActiveViewingTeamIdState(null);
     setAreaNotes([]);
     setPendingInvites([]);
     setFirebaseSyncError(null);
@@ -1078,6 +1382,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     clearTeamSession();
     setSelectedDoctorId(null);
     setDoctorDirectoryAreaFilter('');
+    setDoctorDirectorySubAreaFilter('');
+    setHospitalDirectorySubAreaFilter('');
     setDoctorDirectoryHospitalFilter('');
     setDoctorDirectorySpecialtyFilter('');
     pushToast({
@@ -1222,9 +1528,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         return;
       }
+      if (
+        isReadOnlySuperiorView &&
+        (sheet === 'Doctors' || sheet === 'Chambers' || sheet === 'Hospitals' || sheet === 'MPO_Users')
+      ) {
+        pushToast({
+          type: 'warning',
+          title: 'Manager View (Read-Only)',
+          message: 'Switch back to My Territory to add or modify records.',
+        });
+        return;
+      }
       setRecordModal({ mode: 'add', sheet, initialRecord: initialValues });
     },
-    [isSuperAdmin, pushToast]
+    [isSuperAdmin, isReadOnlySuperiorView, pushToast]
   );
 
   const openEditModal = useCallback(
@@ -1237,9 +1554,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         return;
       }
+      if (
+        isReadOnlySuperiorView &&
+        (sheet === 'Doctors' || sheet === 'Chambers' || sheet === 'Hospitals' || sheet === 'MPO_Users')
+      ) {
+        pushToast({
+          type: 'warning',
+          title: 'Manager View (Read-Only)',
+          message: 'Switch back to My Territory to edit records.',
+        });
+        return;
+      }
       setRecordModal({ mode: 'edit', sheet, initialRecord: record });
     },
-    [isSuperAdmin, pushToast]
+    [isSuperAdmin, isReadOnlySuperiorView, pushToast]
   );
 
   const closeRecordModal = useCallback(() => {
@@ -1256,9 +1584,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
         return;
       }
+      if (
+        isReadOnlySuperiorView &&
+        (sheet === 'Doctors' || sheet === 'Chambers' || sheet === 'Hospitals' || sheet === 'MPO_Users')
+      ) {
+        pushToast({
+          type: 'warning',
+          title: 'Manager View (Read-Only)',
+          message: 'Switch back to My Territory to delete records.',
+        });
+        return;
+      }
       setDeleteTarget({ sheet, record, displayLabel });
     },
-    [isSuperAdmin, pushToast]
+    [isSuperAdmin, isReadOnlySuperiorView, pushToast]
   );
 
   const closeDeleteConfirm = useCallback(() => {
@@ -1690,50 +2029,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { syncedImmediately: false };
       }
 
-      // Route private Team workspace records directly to Cloud Firestore areas/{areaId}/*
+      // Route private Team workspace records directly to Cloud Firestore teams/{teamId}/*
       const isPrivateTeamSheet =
         sheet === 'Doctors' ||
         sheet === 'Chambers' ||
         sheet === 'Hospitals' ||
         sheet === 'MPO_Users';
 
+      if (isPrivateTeamSheet && isReadOnlySuperiorView) {
+        pushToast({
+          type: 'warning',
+          title: 'Manager View (Read-Only)',
+          message: 'Superiors have read-only access and cannot modify team records.',
+        });
+        return { syncedImmediately: false };
+      }
+
       if (
         isPrivateTeamSheet &&
         teamSession?.loginMode === 'firebase' &&
         firebaseUser &&
-        firebaseProfile?.areaId
+        (firebaseProfile?.teamId || firebaseProfile?.areaId)
       ) {
-        const areaId = firebaseProfile.areaId;
+        const targetTeamId = firebaseProfile.teamId || firebaseProfile.areaId;
         const uid = firebaseUser.uid;
         try {
           if (sheet === 'Doctors') {
             if (action === 'delete') {
-              await deleteAreaDoctor(areaId, String(data.Doctor_ID || ''));
+              await deleteAreaDoctor(targetTeamId, String(data.Doctor_ID || ''));
             } else {
-              await saveAreaDoctor(areaId, { ...data, Area_ID: areaId }, uid);
+              await saveAreaDoctor(targetTeamId, { ...data, Area_ID: targetTeamId }, uid);
             }
           } else if (sheet === 'Chambers') {
             if (action === 'delete') {
-              await deleteAreaChamber(areaId, String(data.Chamber_ID || ''));
+              await deleteAreaChamber(targetTeamId, String(data.Chamber_ID || ''));
             } else {
-              await saveAreaChamber(areaId, { ...data, Area_ID: areaId }, uid);
+              await saveAreaChamber(targetTeamId, { ...data, Area_ID: targetTeamId }, uid);
             }
           } else if (sheet === 'Hospitals') {
             if (action === 'delete') {
-              await deleteAreaHospital(areaId, String(data.Hospital_ID || ''));
+              await deleteAreaHospital(targetTeamId, String(data.Hospital_ID || ''));
             } else {
-              await saveAreaHospital(areaId, { ...data, Area_ID: areaId }, uid);
+              await saveAreaHospital(targetTeamId, { ...data, Area_ID: targetTeamId }, uid);
             }
           } else if (sheet === 'MPO_Users') {
             if (action === 'delete') {
-              await deleteAreaMember(areaId, String(data.MPO_ID || ''));
+              await deleteAreaMember(targetTeamId, String(data.MPO_ID || ''));
             } else {
               await saveAreaMember(
-                areaId,
+                targetTeamId,
                 {
                   ...data,
-                  Area_ID: areaId,
-                  Area: data.Area || firebaseProfile.areaName,
+                  Area_ID: targetTeamId,
+                  Area: data.Area || firebaseProfile.territoryName || firebaseProfile.areaName,
                   Territory:
                     data.Territory ||
                     [firebaseProfile.district, firebaseProfile.upazila].filter(Boolean).join(' · '),
@@ -1788,7 +2136,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       saveSyncQueue(syncQueueRef.current);
       return { syncedImmediately: false };
     },
-    [apiUrl, firebaseProfile, firebaseUser, isSuperAdmin, pushToast, teamSession?.loginMode]
+    [
+      apiUrl,
+      firebaseProfile,
+      firebaseUser,
+      isReadOnlySuperiorView,
+      isSuperAdmin,
+      pushToast,
+      teamSession?.loginMode,
+    ]
   );
 
   const confirmDeleteRecord = useCallback(async () => {
@@ -2014,13 +2370,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       clearGoogleRedirectError,
       areaNotes,
       pendingInvites,
+      teamMeta,
+      teamSubAreas,
+      teamSuperiors,
+      superiorAccessibleTeams,
+      activeViewingTeamId,
+      setActiveViewingTeamId,
+      isReadOnlySuperiorView,
+      effectiveTeamId,
+      activeTerritoryName,
       teamPinConfigured,
       loginTeamWithGoogle,
       loginTeamWithFirebase,
       registerTeamWithFirebase,
       completeFirebaseAreaProfile,
+      updateTerritoryName,
+      saveSubArea,
+      deleteSubArea,
       searchTeamOfficers,
       sendOfficerTeamInvite,
+      revokeTeamSuperior,
       acceptIncomingInvite,
       declineIncomingInvite,
       joinTeamWithCode,
@@ -2030,63 +2399,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       loginWithMpoCredentials,
       logoutTeam,
       updateTeamPin,
-    isSuperAdmin,
-    superAdminSource,
-    refreshSuperAdminStatus,
-    setupSuperAdmin,
-    loginSuperAdmin,
-    changeSuperAdminPasscode,
-    logoutSuperAdmin,
-    activeMpoId: activeMpo?.MPO_ID || activeMpoId,
-    setActiveMpoId,
-    activeMpo,
-    theme,
-    toggleTheme,
-    toasts,
-    pushToast,
-    dismissToast,
-    recordModal,
-    openAddModal,
-    openEditModal,
-    closeRecordModal,
-    deleteTarget,
-    isDeleting,
-    requestDeleteRecord,
-    closeDeleteConfirm,
-    confirmDeleteRecord,
-    selectedDoctorId,
-    setSelectedDoctorId,
-    selectedSpecialistId,
-    setSelectedSpecialistId,
-    selectedProductId,
-    setSelectedProductId,
-    openProductBrief,
-    prefillDetailing,
-    setPrefillDetailing,
-    doctorDirectoryHospitalFilter,
-    setDoctorDirectoryHospitalFilter,
-    doctorDirectoryAreaFilter,
-    setDoctorDirectoryAreaFilter,
-    doctorDirectorySpecialtyFilter,
-    setDoctorDirectorySpecialtyFilter,
-    openDoctorProfile,
-    openSpecialistDetail,
-    pendingKnowledgeChapter,
-    setPendingKnowledgeChapter,
-    openKnowledgeChapter,
-    startDetailingFlow,
-    updateApiUrl,
-    refreshFromServer,
-    syncPendingQueue,
-    flushPendingQueueNow,
-    queueBatchUpdates,
-    submitRecord,
-    removeQueuedItem,
-    clearSyncQueue,
-    resetLocalStarterData,
-    areaMap,
-    hospitalMap,
-    doctorMap,
+      isSuperAdmin,
+      superAdminSource,
+      refreshSuperAdminStatus,
+      setupSuperAdmin,
+      loginSuperAdmin,
+      changeSuperAdminPasscode,
+      logoutSuperAdmin,
+      activeMpoId: activeMpo?.MPO_ID || activeMpoId,
+      setActiveMpoId,
+      activeMpo,
+      theme,
+      toggleTheme,
+      toasts,
+      pushToast,
+      dismissToast,
+      recordModal,
+      openAddModal,
+      openEditModal,
+      closeRecordModal,
+      deleteTarget,
+      isDeleting,
+      requestDeleteRecord,
+      closeDeleteConfirm,
+      confirmDeleteRecord,
+      selectedDoctorId,
+      setSelectedDoctorId,
+      selectedSpecialistId,
+      setSelectedSpecialistId,
+      selectedProductId,
+      setSelectedProductId,
+      openProductBrief,
+      prefillDetailing,
+      setPrefillDetailing,
+      doctorDirectoryHospitalFilter,
+      setDoctorDirectoryHospitalFilter,
+      doctorDirectoryAreaFilter,
+      setDoctorDirectoryAreaFilter,
+      doctorDirectorySubAreaFilter,
+      setDoctorDirectorySubAreaFilter,
+      hospitalDirectorySubAreaFilter,
+      setHospitalDirectorySubAreaFilter,
+      doctorDirectorySpecialtyFilter,
+      setDoctorDirectorySpecialtyFilter,
+      openDoctorProfile,
+      openSpecialistDetail,
+      pendingKnowledgeChapter,
+      setPendingKnowledgeChapter,
+      openKnowledgeChapter,
+      startDetailingFlow,
+      updateApiUrl,
+      refreshFromServer,
+      syncPendingQueue,
+      flushPendingQueueNow,
+      queueBatchUpdates,
+      submitRecord,
+      removeQueuedItem,
+      clearSyncQueue,
+      resetLocalStarterData,
+      areaMap,
+      hospitalMap,
+      doctorMap,
       departmentMap,
       productMap,
       mpoMap,
@@ -2118,13 +2491,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       clearGoogleRedirectError,
       areaNotes,
       pendingInvites,
+      teamMeta,
+      teamSubAreas,
+      teamSuperiors,
+      superiorAccessibleTeams,
+      activeViewingTeamId,
+      setActiveViewingTeamId,
+      isReadOnlySuperiorView,
+      effectiveTeamId,
+      activeTerritoryName,
       teamPinConfigured,
       loginTeamWithGoogle,
       loginTeamWithFirebase,
       registerTeamWithFirebase,
       completeFirebaseAreaProfile,
+      updateTerritoryName,
+      saveSubArea,
+      deleteSubArea,
       searchTeamOfficers,
       sendOfficerTeamInvite,
+      revokeTeamSuperior,
       acceptIncomingInvite,
       declineIncomingInvite,
       joinTeamWithCode,
@@ -2165,6 +2551,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       prefillDetailing,
       doctorDirectoryHospitalFilter,
       doctorDirectoryAreaFilter,
+      doctorDirectorySubAreaFilter,
+      hospitalDirectorySubAreaFilter,
       doctorDirectorySpecialtyFilter,
       openDoctorProfile,
       openSpecialistDetail,

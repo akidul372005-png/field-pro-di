@@ -27,6 +27,8 @@ export interface TeamSession {
   uid?: string;
   email?: string;
   phone?: string;
+  teamId?: string;
+  territoryName?: string;
   areaId: string;
   areaName: string;
   joinCode?: string;
@@ -50,6 +52,8 @@ export interface FirebaseUserProfile {
   employeeCode?: string;
   phone?: string;
   phoneNormalized?: string;
+  teamId: string;
+  territoryName: string;
   areaId: string;
   areaName: string;
   joinCode?: string;
@@ -59,14 +63,53 @@ export interface FirebaseUserProfile {
   updatedAt: string;
 }
 
+export interface TeamWorkspaceMeta {
+  teamId: string;
+  territoryName: string;
+  district: string;
+  upazila: string;
+  joinCode: string;
+  ownerUid: string;
+  members: string[];
+  superiorUids: string[];
+  createdAt?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export interface TeamSubArea {
+  SubArea_ID: string;
+  Team_ID: string;
+  Area_Name: string;
+  Market_Type?: string;
+  Notes?: string;
+  Status?: string;
+  Created_At?: string;
+  Updated_At?: string;
+}
+
+export interface TeamSuperior {
+  uid: string;
+  officerName: string;
+  email: string;
+  phone?: string;
+  role: string;
+  approvedAt: string;
+  invitedByUid?: string;
+  invitedByName?: string;
+}
+
 export interface TeamInvite {
   inviteId: string;
+  inviteType: 'member' | 'superior';
   toUid: string;
   toEmail: string;
   toPhone?: string;
   toName?: string;
   fromUid: string;
   fromName: string;
+  teamId: string;
+  territoryName: string;
   areaId: string;
   areaName: string;
   district?: string;
@@ -83,6 +126,8 @@ export interface OfficerSearchResult {
   email: string;
   phone?: string;
   role?: string;
+  teamId: string;
+  territoryName: string;
   areaId: string;
   areaName: string;
   district?: string;
@@ -229,6 +274,8 @@ export interface Hospital {
   Hospital_ID: string;
   Hospital_Name: string;
   Area_ID: string;
+  Sub_Area?: string;
+  areaName?: string;
   Hospital_Type?: string;
   Address?: string;
   Phone?: string;
@@ -267,6 +314,8 @@ export interface Doctor {
   Department_ID: string;
   Primary_Hospital_ID: string;
   Area_ID: string;
+  Sub_Area?: string;
+  areaName?: string;
   Phone?: string;
   Email?: string;
   Category?: string;
