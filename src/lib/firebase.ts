@@ -16,12 +16,24 @@ import {
   Firestore,
 } from 'firebase/firestore';
 
+function resolveAuthDomain(): string {
+  if (typeof window === 'undefined') {
+    return 'field-pro-di.firebaseapp.com';
+  }
+  const host = window.location.hostname;
+  if (
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host.endsWith('.run.app')
+  ) {
+    return 'field-pro-di.firebaseapp.com';
+  }
+  return host;
+}
+
 export const firebaseConfig = {
   apiKey: 'AIzaSyCdzK_xpGPo6iDu2z3HemGe-WKEXL5Qlvk',
-  authDomain:
-    typeof window !== 'undefined' && window.location.hostname !== 'localhost'
-      ? window.location.hostname
-      : 'field-pro-di.firebaseapp.com',
+  authDomain: resolveAuthDomain(),
   projectId: 'field-pro-di',
   storageBucket: 'field-pro-di.firebasestorage.app',
   messagingSenderId: '464919706082',
@@ -44,6 +56,7 @@ if (typeof window !== 'undefined') {
 }
 
 // Initialize Cloud Firestore with multi-tab IndexedDB offline persistence
+// and auto-detected long polling so connections stay reliable inside iframes & mobile networks
 function createPersistentFirestore(firebaseApp: FirebaseApp): Firestore {
   if (typeof window === 'undefined') {
     return getFirestore(firebaseApp);
@@ -53,6 +66,7 @@ function createPersistentFirestore(firebaseApp: FirebaseApp): Firestore {
       localCache: persistentLocalCache({
         tabManager: persistentMultipleTabManager(),
       }),
+      experimentalAutoDetectLongPolling: true,
     });
   } catch {
     // If already initialized (e.g., hot reload) or IndexedDB unavailable, reuse existing instance
@@ -122,13 +136,15 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
-export async function testFirestoreConnection(): Promise<void> {
-  if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+export async function testFirestoreConnection(): Promise<boolean> {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return false;
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
+    return true;
   } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error('Please check your Firebase configuration (Firestore client is offline).');
-    }
+    const code = (error as { code?: string } | null)?.code ?? '';
+    // permission-denied proves Firestore server is reachable
+    if (code === 'permission-denied') return true;
+    return false;
   }
 }

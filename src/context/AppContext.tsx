@@ -31,7 +31,7 @@ import {
   TeamWorkspaceMeta,
   ToastNotification,
 } from '../types';
-import { auth, testFirestoreConnection } from '../lib/firebase';
+import { auth } from '../lib/firebase';
 import { loadDatasetFromIndexedDB, saveDatasetToIndexedDB } from '../lib/cacheDb';
 import {
   TeamRegistrationInput,
@@ -651,11 +651,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     firebaseHospitals,
     firebaseMembers,
   ]);
-
-  // Lightweight Firestore connectivity check on boot
-  useEffect(() => {
-    void testFirestoreConnection();
-  }, []);
 
   // Firebase Auth listener + Google redirect completion — primary auth source (works online & offline)
   useEffect(() => {
