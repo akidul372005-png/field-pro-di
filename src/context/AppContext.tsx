@@ -748,6 +748,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     setFirebaseSyncError(null);
+    setTeamMeta(null);
+    setFirebaseDoctors([]);
+    setFirebaseChambers([]);
+    setFirebaseHospitals([]);
+    setTeamSubAreas([]);
+    setFirebaseMembers([]);
+    setTeamSuperiors([]);
+    setAreaNotes([]);
+    setDoctorDirectorySubAreaFilter('');
+    setHospitalDirectorySubAreaFilter('');
+    setDoctorDirectoryHospitalFilter('');
+
     const unsub = subscribeToAreaWorkspace(effectiveTeamId, {
       onMeta: (meta) => {
         setTeamMeta(meta);

@@ -1341,13 +1341,77 @@ export const TeamWorkspaceView: React.FC = () => {
         }
       />
 
+      {/* Sleek 4-Tab Bar Directly Below Sticky Header: Doctors | Hospitals | Areas | Team */}
+      <div
+        role="tablist"
+        aria-label="Team workspace sections"
+        className="grid grid-cols-4 gap-1 p-1 rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 shadow-xs"
+      >
+        {(
+          [
+            {
+              id: 'doctors' as TeamWorkspaceSubTab,
+              label: 'Doctors',
+              count: scopedDoctorsCount,
+              icon: Stethoscope,
+            },
+            {
+              id: 'hospitals' as TeamWorkspaceSubTab,
+              label: 'Hospitals',
+              count: scopedHospitalsBase.length,
+              icon: Building2,
+            },
+            {
+              id: 'areas' as TeamWorkspaceSubTab,
+              label: 'Areas',
+              count: teamSubAreas.length,
+              icon: MapPin,
+            },
+            {
+              id: 'team' as TeamWorkspaceSubTab,
+              label: 'Team',
+              count: scopedTeamMembers.length,
+              icon: Users,
+            },
+          ] as const
+        ).map((tab) => {
+          const Icon = tab.icon;
+          const active = activeSubTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => setActiveSubTab(tab.id)}
+              className={`relative min-h-[42px] px-1 sm:px-3 rounded-xl text-[11px] sm:text-sm font-semibold flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
+                active
+                  ? 'bg-[#0D2B45] dark:bg-[#0E7C7B] text-white'
+                  : 'text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 hover:bg-[#F4F8FC] dark:hover:bg-[#071522]'
+              }`}
+            >
+              <Icon className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+              <span>
+                {tab.label}{' '}
+                <span className="font-mono tabular-nums text-[10px] sm:text-[11px] opacity-80">
+                  ({tab.count})
+                </span>
+              </span>
+              {tab.id === 'team' && pendingInvites.length > 0 && (
+                <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-rose-500" />
+              )}
+            </button>
+          );
+        })}
+      </div>
+
       {/* Manager View Switcher (only shown if officer has approved read-only access to subordinate territories) */}
       {superiorAccessibleTeams.length > 0 && (
-        <div className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-2.5 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+        <div className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-2 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
           <button
             type="button"
             onClick={() => setActiveViewingTeamId(null)}
-            className={`min-h-[36px] px-3 rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+            className={`min-h-[34px] px-3 rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
               !isReadOnlySuperiorView
                 ? 'bg-[#0D2B45] dark:bg-[#0E7C7B] text-white'
                 : 'bg-[#F4F8FC] dark:bg-[#071522] text-[#0D2B45]/80 dark:text-[#EBF4FA]/80 hover:bg-[#EBF4FA] dark:hover:bg-[#102940]'
@@ -1364,7 +1428,7 @@ export const TeamWorkspaceView: React.FC = () => {
                 key={team.teamId}
                 type="button"
                 onClick={() => setActiveViewingTeamId(team.teamId)}
-                className={`min-h-[36px] px-3 rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
+                className={`min-h-[34px] px-3 rounded-xl text-xs font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer transition-colors ${
                   active
                     ? 'bg-indigo-600 text-white'
                     : 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-200 border border-indigo-200/70 dark:border-indigo-500/30 hover:bg-indigo-100 dark:hover:bg-indigo-950/60'
@@ -1402,122 +1466,6 @@ export const TeamWorkspaceView: React.FC = () => {
           </button>
         </div>
       )}
-
-      {/* Editable Territory Strip (Territory Name + District/Upazila + Edit Pencil) */}
-      <div className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 px-3.5 py-3">
-        {!editingTerritory ? (
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-9 h-9 rounded-xl bg-[#E6FBF3] dark:bg-[#0C2E2B] text-[#0E7C7B] dark:text-[#22E3D0] flex items-center justify-center shrink-0">
-                <MapPin className="w-4 h-4" />
-              </div>
-              <div className="min-w-0">
-                <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="font-display font-bold text-sm sm:text-base text-[#0D2B45] dark:text-white truncate">
-                    {activeTerritoryName}
-                  </span>
-                  {!isReadOnlySuperiorView && (
-                    <button
-                      type="button"
-                      onClick={handleStartTerritoryEdit}
-                      aria-label="Edit Territory Name"
-                      title="Edit Territory Name"
-                      className="min-h-[28px] min-w-[28px] rounded-lg inline-flex items-center justify-center text-[#0D2B45]/55 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/55 dark:hover:text-[#22E3D0] hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/60 cursor-pointer shrink-0 transition-colors"
-                    >
-                      <Pencil className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[#0D2B45]/60 dark:text-[#EBF4FA]/65">
-                  {activeScopeMeta && <span>{activeScopeMeta}</span>}
-                  <span>
-                    {memberCount <= 1 && superiorCount === 0
-                      ? 'Private Territory'
-                      : `${memberCount} Officer${memberCount === 1 ? '' : 's'}${
-                          superiorCount > 0
-                            ? ` · ${superiorCount} Superior${superiorCount === 1 ? '' : 's'}`
-                            : ''
-                        }`}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <span className="px-2 py-1 rounded-lg bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 text-[10.5px] font-semibold text-[#0E7C7B] dark:text-[#22E3D0] whitespace-nowrap shrink-0">
-              {isReadOnlySuperiorView ? 'Read-Only' : isOnline ? 'Private Sync' : 'Offline'}
-            </span>
-          </div>
-        ) : (
-          <form onSubmit={handleSaveTerritoryEdit} className="space-y-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-bold text-[#0D2B45] dark:text-white">
-                Edit Territory Name
-              </span>
-              <button
-                type="button"
-                onClick={() => setEditingTerritory(false)}
-                aria-label="Cancel editing territory"
-                className="p-1 rounded-lg text-[#0D2B45]/55 dark:text-[#EBF4FA]/55 hover:bg-[#F4F8FC] dark:hover:bg-[#13304C] cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-              <input
-                type="text"
-                required
-                value={territoryNameDraft}
-                onChange={(e) => {
-                  setTerritoryNameDraft(e.target.value);
-                  if (territoryEditError) setTerritoryEditError('');
-                }}
-                placeholder="Territory Name (e.g. Eidgaon Territory)"
-                aria-label="Territory Name"
-                className="w-full min-h-[40px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
-              />
-              <input
-                type="text"
-                list="bd-districts-list"
-                value={territoryDistrictDraft}
-                onChange={(e) => setTerritoryDistrictDraft(e.target.value)}
-                placeholder="District (optional)"
-                aria-label="District"
-                className="w-full min-h-[40px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
-              />
-              <input
-                type="text"
-                value={territoryUpazilaDraft}
-                onChange={(e) => setTerritoryUpazilaDraft(e.target.value)}
-                placeholder="Upazila / Thana (optional)"
-                aria-label="Upazila"
-                className="w-full min-h-[40px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
-              />
-            </div>
-            {territoryEditError && (
-              <p className="text-xs font-medium text-rose-600 dark:text-rose-300">
-                {territoryEditError}
-              </p>
-            )}
-            <div className="flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setEditingTerritory(false)}
-                className="min-h-[36px] px-3 rounded-xl border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-xs font-semibold text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={territorySaving}
-                className="min-h-[36px] px-3.5 rounded-xl bg-[#0E7C7B] hover:bg-[#095C5B] text-white text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
-              >
-                <Check className="w-3.5 h-3.5" />
-                <span>{territorySaving ? 'Saving...' : 'Save Territory'}</span>
-              </button>
-            </div>
-          </form>
-        )}
-      </div>
 
       {/* Live Incoming Invites Banner (Member Invites & Superior Manager View Invites) */}
       {pendingInvites.length > 0 && (
@@ -1636,70 +1584,6 @@ export const TeamWorkspaceView: React.FC = () => {
           <p className="leading-relaxed">{firebaseSyncError}</p>
         </div>
       )}
-
-      {/* Exact 4 Clean Tabs: Doctors | Hospitals | Areas | Team */}
-      <div
-        role="tablist"
-        aria-label="Team workspace sections"
-        className="grid grid-cols-4 gap-1 p-1 rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10"
-      >
-        {(
-          [
-            {
-              id: 'doctors' as TeamWorkspaceSubTab,
-              label: 'Doctors',
-              count: scopedDoctorsCount,
-              icon: Stethoscope,
-            },
-            {
-              id: 'hospitals' as TeamWorkspaceSubTab,
-              label: 'Hospitals',
-              count: scopedHospitalsBase.length,
-              icon: Building2,
-            },
-            {
-              id: 'areas' as TeamWorkspaceSubTab,
-              label: 'Areas',
-              count: teamSubAreas.length,
-              icon: MapPin,
-            },
-            {
-              id: 'team' as TeamWorkspaceSubTab,
-              label: 'Team',
-              count: scopedTeamMembers.length,
-              icon: Users,
-            },
-          ] as const
-        ).map((tab) => {
-          const Icon = tab.icon;
-          const active = activeSubTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => setActiveSubTab(tab.id)}
-              className={`relative min-h-[44px] px-1 sm:px-3 rounded-xl text-[11px] sm:text-sm font-semibold flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
-                active
-                  ? 'bg-[#0D2B45] dark:bg-[#0E7C7B] text-white'
-                  : 'text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 hover:bg-[#F4F8FC] dark:hover:bg-[#071522]'
-              }`}
-            >
-              <Icon className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
-              <span>
-                {tab.label}{' '}
-                <span className="font-mono tabular-nums text-[10px] sm:text-[11px] opacity-80">
-                  ({tab.count})
-                </span>
-              </span>
-              {tab.id === 'team' && pendingInvites.length > 0 && (
-                <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-rose-500" />
-              )}
-            </button>
-          );
-        })}
-      </div>
 
       {/* =================================================================== */}
       {/* SUB-TAB 1: TEAM-SCOPED DOCTORS (with Sub-Area Filter & Badges)      */}
@@ -2532,6 +2416,125 @@ export const TeamWorkspaceView: React.FC = () => {
           )}
         </div>
       )}
+
+      {/* Editable Territory Card — Neatly at the BOTTOM of Team Workspace (just above MedMentor BD footer) */}
+      <section
+        aria-label="Territory Information"
+        className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 px-3.5 py-3"
+      >
+        {!editingTerritory ? (
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-9 h-9 rounded-xl bg-[#E6FBF3] dark:bg-[#0C2E2B] text-[#0E7C7B] dark:text-[#22E3D0] flex items-center justify-center shrink-0">
+                <MapPin className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="font-display font-bold text-sm sm:text-base text-[#0D2B45] dark:text-white truncate">
+                    {activeTerritoryName}
+                  </span>
+                  {!isReadOnlySuperiorView && (
+                    <button
+                      type="button"
+                      onClick={handleStartTerritoryEdit}
+                      aria-label="Edit Territory Name"
+                      title="Edit Territory Name"
+                      className="min-h-[28px] min-w-[28px] rounded-lg inline-flex items-center justify-center text-[#0D2B45]/55 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/55 dark:hover:text-[#22E3D0] hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/60 cursor-pointer shrink-0 transition-colors"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[#0D2B45]/60 dark:text-[#EBF4FA]/65">
+                  {activeScopeMeta && <span>{activeScopeMeta}</span>}
+                  <span>
+                    {memberCount <= 1 && superiorCount === 0
+                      ? 'Private Territory'
+                      : `${memberCount} Officer${memberCount === 1 ? '' : 's'}${
+                          superiorCount > 0
+                            ? ` · ${superiorCount} Superior${superiorCount === 1 ? '' : 's'}`
+                            : ''
+                        }`}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <span className="px-2 py-1 rounded-lg bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 text-[10.5px] font-semibold text-[#0E7C7B] dark:text-[#22E3D0] whitespace-nowrap shrink-0">
+              {isReadOnlySuperiorView ? 'Read-Only' : isOnline ? 'Private Sync' : 'Offline'}
+            </span>
+          </div>
+        ) : (
+          <form onSubmit={handleSaveTerritoryEdit} className="space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-bold text-[#0D2B45] dark:text-white">
+                Edit Territory Name
+              </span>
+              <button
+                type="button"
+                onClick={() => setEditingTerritory(false)}
+                aria-label="Cancel editing territory"
+                className="p-1 rounded-lg text-[#0D2B45]/55 dark:text-[#EBF4FA]/55 hover:bg-[#F4F8FC] dark:hover:bg-[#13304C] cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <input
+                type="text"
+                required
+                value={territoryNameDraft}
+                onChange={(e) => {
+                  setTerritoryNameDraft(e.target.value);
+                  if (territoryEditError) setTerritoryEditError('');
+                }}
+                placeholder="Territory Name (e.g. Eidgaon Territory)"
+                aria-label="Territory Name"
+                className="w-full min-h-[40px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+              />
+              <input
+                type="text"
+                list="bd-districts-list"
+                value={territoryDistrictDraft}
+                onChange={(e) => setTerritoryDistrictDraft(e.target.value)}
+                placeholder="District (optional)"
+                aria-label="District"
+                className="w-full min-h-[40px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+              />
+              <input
+                type="text"
+                value={territoryUpazilaDraft}
+                onChange={(e) => setTerritoryUpazilaDraft(e.target.value)}
+                placeholder="Upazila / Thana (optional)"
+                aria-label="Upazila"
+                className="w-full min-h-[40px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+              />
+            </div>
+            {territoryEditError && (
+              <p className="text-xs font-medium text-rose-600 dark:text-rose-300">
+                {territoryEditError}
+              </p>
+            )}
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setEditingTerritory(false)}
+                className="min-h-[36px] px-3 rounded-xl border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-xs font-semibold text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={territorySaving}
+                className="min-h-[36px] px-3.5 rounded-xl bg-[#0E7C7B] hover:bg-[#095C5B] text-white text-xs font-bold inline-flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>{territorySaving ? 'Saving...' : 'Save Territory'}</span>
+              </button>
+            </div>
+          </form>
+        )}
+      </section>
 
       {/* ================================================================= */}
       {/* INVITE MODAL (Member Collaboration OR Superior Manager View)      */}

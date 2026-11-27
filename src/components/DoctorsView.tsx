@@ -52,7 +52,6 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
     setDoctorDirectoryHospitalFilter,
     doctorDirectorySpecialtyFilter,
     setDoctorDirectorySpecialtyFilter,
-    teamSubAreas,
     isReadOnlySuperiorView,
     openAddModal,
     openEditModal,
@@ -69,28 +68,6 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
     return dataset.Doctors.filter((d) => d.Area_ID === areaScopeId);
   }, [dataset.Doctors, isSingleAreaScoped, areaScopeId]);
 
-  const scopedHospitalsBase = useMemo(() => {
-    if (!isSingleAreaScoped) return dataset.Hospitals;
-    return dataset.Hospitals.filter((h) => h.Area_ID === areaScopeId);
-  }, [dataset.Hospitals, isSingleAreaScoped, areaScopeId]);
-
-  const specialistOptions = useMemo(() => {
-    const seen = new Map<string, string>();
-    dataset.Departments.forEach((dept) => {
-      const name = String(dept.Department_Name ?? '').trim();
-      if (name && !seen.has(name.toLowerCase())) {
-        seen.set(name.toLowerCase(), name);
-      }
-    });
-    dataset.Doctors.forEach((d) => {
-      const name = String(d.Specialty ?? '').trim();
-      if (name && !seen.has(name.toLowerCase())) {
-        seen.set(name.toLowerCase(), name);
-      }
-    });
-    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
-  }, [dataset.Departments, dataset.Doctors]);
-
   const doctorTypeCounts = useMemo(() => {
     let regular = 0;
     let guest = 0;
@@ -100,26 +77,6 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
     });
     return { regular, guest };
   }, [scopedDoctorsBase]);
-
-  const subAreaFilterOptions = useMemo(() => {
-    const map = new Map<string, { name: string; count: number }>();
-    teamSubAreas.forEach((sa) => {
-      const name = sa.Area_Name.trim();
-      if (name) map.set(name.toLowerCase(), { name, count: 0 });
-    });
-    scopedDoctorsBase.forEach((doc) => {
-      const sub = String(doc.Sub_Area || doc.areaName || '').trim();
-      if (!sub) return;
-      const key = sub.toLowerCase();
-      const existing = map.get(key);
-      if (existing) {
-        existing.count += 1;
-      } else {
-        map.set(key, { name: sub, count: 1 });
-      }
-    });
-    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
-  }, [teamSubAreas, scopedDoctorsBase]);
 
   const filteredDoctors = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -229,14 +186,6 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
     [dataset.Doctor_Product_Detailing, selectedDoctor]
   );
 
-  const chamberCountByDoctor = useMemo(() => {
-    const map = new Map<string, number>();
-    dataset.Chambers.forEach((c) => {
-      map.set(c.Doctor_ID, (map.get(c.Doctor_ID) || 0) + 1);
-    });
-    return map;
-  }, [dataset.Chambers]);
-
   const resetFilters = () => {
     setSearchQuery('');
     setDoctorDirectoryAreaFilter('');
@@ -246,203 +195,164 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
     setDoctorTypeFilter('');
   };
 
+  const activeHospitalLabel = doctorDirectoryHospitalFilter
+    ? hospitalMap.get(doctorDirectoryHospitalFilter)?.Hospital_Name || doctorDirectoryHospitalFilter
+    : '';
+
   return (
-    <div className="space-y-5">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
-        <div>
-          {!embeddedInTeam && (
-            <h1 className="text-2xl font-display font-bold text-[#0D2B45] dark:text-white tracking-tight">
-              Doctors &amp; Chambers
-            </h1>
-          )}
-          <p className="text-xs sm:text-sm text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 tabular-nums">
-            Showing {filteredDoctors.length} of {scopedDoctorsBase.length} physicians · Tap a doctor for chamber schedule &amp; detailing scripts
-          </p>
+    <div className="space-y-3">
+      {!embeddedInTeam && (
+        <h1 className="text-xl font-display font-bold text-[#0D2B45] dark:text-white tracking-tight">
+          Doctors
+        </h1>
+      )}
+
+      {/* Row 1: Compact Search Input + Sleek + Add Button */}
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1 min-w-0">
+          <Search
+            className="w-4 h-4 text-[#0D2B45]/45 dark:text-[#EBF4FA]/45 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+            aria-hidden="true"
+          />
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="ডাক্তার, ডিগ্রি বা এরিয়া খুঁজুন..."
+            aria-label="Search doctors by name, degree, or area"
+            className="w-full min-h-[42px] pl-9 pr-3 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-sm text-[#0D2B45] dark:text-white placeholder:text-[#0D2B45]/45 dark:placeholder:text-[#EBF4FA]/40 focus:outline-none focus:border-[#0E7C7B]"
+          />
         </div>
 
-        <div className="flex items-center gap-3 self-start sm:self-auto">
+        {!isReadOnlySuperiorView && (
+          <button
+            type="button"
+            onClick={() =>
+              openAddModal(
+                'Doctors',
+                isSingleAreaScoped
+                  ? {
+                      Area_ID: areaScopeId,
+                      ...(doctorDirectorySubAreaFilter
+                        ? { Sub_Area: doctorDirectorySubAreaFilter }
+                        : {}),
+                    }
+                  : undefined
+              )
+            }
+            className="min-h-[42px] px-3.5 rounded-xl bg-[#0D2B45] hover:bg-[#133859] dark:bg-[#0E7C7B] dark:hover:bg-[#149A99] text-white text-xs sm:text-sm font-bold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors active:scale-[0.97] cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Add</span>
+          </button>
+        )}
+      </div>
+
+      {/* Row 2: Clean 3-Pill Filter Row (সব | নিয়মিত | গেস্ট) */}
+      <div
+        role="group"
+        aria-label="Filter doctors by type"
+        className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10"
+      >
+        {(
+          [
+            { value: '', label: 'সব (All)', count: scopedDoctorsBase.length },
+            { value: 'Regular', label: 'নিয়মিত (Regular)', count: doctorTypeCounts.regular },
+            { value: 'Guest', label: 'গেস্ট (Guest)', count: doctorTypeCounts.guest },
+          ] as const
+        ).map((opt) => {
+          const active = doctorTypeFilter === opt.value;
+          return (
+            <button
+              key={opt.value || 'all'}
+              type="button"
+              onClick={() => setDoctorTypeFilter(opt.value)}
+              className={`min-h-[36px] px-2 rounded-lg text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap truncate cursor-pointer ${
+                active
+                  ? opt.value === 'Guest'
+                    ? 'bg-amber-600 text-white'
+                    : 'bg-[#0D2B45] dark:bg-[#0E7C7B] text-white'
+                  : 'text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 hover:bg-[#F4F8FC] dark:hover:bg-[#071522]'
+              }`}
+            >
+              {opt.label}{' '}
+              <span className="font-mono tabular-nums text-[10px] opacity-80">({opt.count})</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Optional Active Context Chip (only when jumped from Areas or Hospitals tab) */}
+      {(doctorDirectorySubAreaFilter || activeHospitalLabel || doctorDirectorySpecialtyFilter) && (
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          {doctorDirectorySubAreaFilter && (
+            <button
+              type="button"
+              onClick={() => setDoctorDirectorySubAreaFilter('')}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#E6FBF3] dark:bg-[#0C2E2B] text-[#0E7C7B] dark:text-[#22E3D0] font-semibold cursor-pointer"
+            >
+              <MapPin className="w-3 h-3" />
+              <span>{doctorDirectorySubAreaFilter}</span>
+              <X className="w-3 h-3 ml-0.5" />
+            </button>
+          )}
+          {activeHospitalLabel && (
+            <button
+              type="button"
+              onClick={() => setDoctorDirectoryHospitalFilter('')}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#EBF4FA] dark:bg-[#102E47] text-[#0D2B45] dark:text-[#9FD8F5] font-semibold cursor-pointer"
+            >
+              <Building2 className="w-3 h-3" />
+              <span className="truncate max-w-[180px]">{activeHospitalLabel}</span>
+              <X className="w-3 h-3 ml-0.5" />
+            </button>
+          )}
+          {doctorDirectorySpecialtyFilter && (
+            <button
+              type="button"
+              onClick={() => setDoctorDirectorySpecialtyFilter('')}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#EBF4FA] dark:bg-[#102E47] text-[#0D2B45] dark:text-[#9FD8F5] font-semibold cursor-pointer"
+            >
+              <span>{doctorDirectorySpecialtyFilter}</span>
+              <X className="w-3 h-3 ml-0.5" />
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Doctors List Grid */}
+      {filteredDoctors.length === 0 ? (
+        <div className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-8 text-center">
+          <p className="text-sm sm:text-base font-display font-semibold text-[#0D2B45] dark:text-white">
+            {activeFilterCount > 0 ? 'No matching doctors found' : 'No doctors added yet'}
+          </p>
+          <p className="text-xs text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 mt-1">
+            {activeFilterCount > 0
+              ? 'Try another search keyword or switch back to সব (All).'
+              : 'Tap + Add above to save your first territory doctor.'}
+          </p>
           {activeFilterCount > 0 && (
             <button
               type="button"
               onClick={resetFilters}
-              className="text-sm font-semibold text-[#0E7C7B] dark:text-[#149A99] hover:underline"
+              className="mt-3.5 inline-flex items-center px-3.5 py-2 rounded-xl bg-[#0E7C7B] text-white text-xs font-semibold cursor-pointer"
             >
-              Clear filters ({activeFilterCount})
+              Reset Filters
             </button>
           )}
-          {!isReadOnlySuperiorView && (
-            <button
-              type="button"
-              onClick={() =>
-                openAddModal(
-                  'Doctors',
-                  isSingleAreaScoped
-                    ? {
-                        Area_ID: areaScopeId,
-                        ...(doctorDirectorySubAreaFilter
-                          ? { Sub_Area: doctorDirectorySubAreaFilter }
-                          : {}),
-                      }
-                    : undefined
-                )
-              }
-              className="min-h-[44px] px-4 py-2 rounded-xl bg-[#0D2B45] hover:bg-[#133859] dark:bg-[#0E7C7B] dark:hover:bg-[#149A99] text-white text-sm font-semibold inline-flex items-center gap-2 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Add Doctor</span>
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Filter Toolbar */}
-      <div className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-4 space-y-3">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {/* Directory Search */}
-          <div className="relative">
-            <Search
-              className="w-4 h-4 text-[#0D2B45]/45 dark:text-[#EBF4FA]/45 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
-              aria-hidden="true"
-            />
-            <input
-              type="search"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Filter by name, degree, sub-area..."
-              aria-label="Filter doctors by name, degree, sub-area, or phone"
-              className="w-full min-h-[44px] pl-9 pr-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-base md:text-sm text-[#0D2B45] dark:text-white placeholder:text-[#0D2B45]/45 dark:placeholder:text-[#EBF4FA]/40 focus:outline-none focus:border-[#0E7C7B]"
-            />
-          </div>
-
-          {/* Sub-Area Filter (Team Territory mode) or Area Filter */}
-          {isSingleAreaScoped ? (
-            <select
-              value={doctorDirectorySubAreaFilter}
-              onChange={(e) => setDoctorDirectorySubAreaFilter(e.target.value)}
-              aria-label="Filter by Sub-Area"
-              className="w-full min-h-[44px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-base md:text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
-            >
-              <option value="">All Sub-Areas ({subAreaFilterOptions.length})</option>
-              {subAreaFilterOptions.map((opt) => (
-                <option key={opt.name} value={opt.name}>
-                  {opt.name} ({opt.count})
-                </option>
-              ))}
-            </select>
-          ) : (
-            <select
-              value={doctorDirectoryAreaFilter}
-              onChange={(e) => setDoctorDirectoryAreaFilter(e.target.value)}
-              aria-label="Filter by Area"
-              className="w-full min-h-[44px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-base md:text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
-            >
-              <option value="">All Areas ({dataset.Areas.length})</option>
-              {dataset.Areas.map((area, idx) => (
-                <option key={`${area.Area_ID}-${idx}`} value={area.Area_ID}>
-                  {area.Area_Name} ({area.District})
-                </option>
-              ))}
-            </select>
-          )}
-
-          {/* Hospital / Chamber Filter */}
-          <select
-            value={doctorDirectoryHospitalFilter}
-            onChange={(e) => setDoctorDirectoryHospitalFilter(e.target.value)}
-            aria-label="Filter by Hospital / Chamber"
-            className="w-full min-h-[44px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-base md:text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
-          >
-            <option value="">All Hospitals / Chambers ({scopedHospitalsBase.length})</option>
-            {scopedHospitalsBase.map((hosp, idx) => (
-              <option key={`${hosp.Hospital_ID}-${idx}`} value={hosp.Hospital_ID}>
-                {hosp.Hospital_Name}
-              </option>
-            ))}
-          </select>
-
-          {/* Specialist Filter */}
-          <select
-            value={doctorDirectorySpecialtyFilter}
-            onChange={(e) => setDoctorDirectorySpecialtyFilter(e.target.value)}
-            aria-label="Filter by Specialist"
-            className="w-full min-h-[44px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-base md:text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
-          >
-            <option value="">All Specialists ({specialistOptions.length})</option>
-            {specialistOptions.map((spec) => (
-              <option key={spec} value={spec}>
-                {spec}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Doctor Type Filter Toggle (All / Regular / Guest) */}
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-2.5 border-t border-[#0D2B45]/8 dark:border-[#EBF4FA]/8">
-          <span className="text-xs font-medium text-[#0D2B45]/60 dark:text-[#EBF4FA]/60">
-            Doctor Type:
-          </span>
-          <div
-            role="group"
-            aria-label="Filter by Doctor Type"
-            className="inline-flex flex-wrap items-center gap-1 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] p-1 border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 max-w-full"
-          >
-            {(
-              [
-                { value: '', label: `All (${scopedDoctorsBase.length})` },
-                { value: 'Regular', label: `Regular · নিয়মিত (${doctorTypeCounts.regular})` },
-                { value: 'Guest', label: `Guest · গেস্ট (${doctorTypeCounts.guest})` },
-              ] as const
-            ).map((opt) => {
-              const active = doctorTypeFilter === opt.value;
-              return (
-                <button
-                  key={opt.value || 'all'}
-                  type="button"
-                  onClick={() => setDoctorTypeFilter(opt.value)}
-                  className={`min-h-[38px] sm:min-h-[32px] px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
-                    active
-                      ? opt.value === 'Guest'
-                        ? 'bg-amber-600 text-white'
-                        : 'bg-[#0D2B45] dark:bg-[#0E7C7B] text-white'
-                      : 'text-[#0D2B45]/70 dark:text-[#EBF4FA]/70 hover:text-[#0D2B45] dark:hover:text-white'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* Doctors List Grid */}
-      {filteredDoctors.length === 0 ? (
-        <div className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-10 text-center">
-          <p className="text-base font-display font-semibold text-[#0D2B45] dark:text-white">
-            No doctors match your filters
-          </p>
-          <p className="text-sm text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 mt-1">
-            Try clearing one of the Area, Hospital, Specialist, or Doctor Type selections.
-          </p>
-          <button
-            type="button"
-            onClick={resetFilters}
-            className="mt-4 inline-flex items-center px-4 py-2 rounded-xl bg-[#0E7C7B] text-white text-sm font-semibold"
-          >
-            Reset Directory Filters
-          </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {filteredDoctors.map((doc, idx) => {
             const hospital = hospitalMap.get(doc.Primary_Hospital_ID);
             const area = areaMap.get(doc.Area_ID);
             const deptName =
               departmentMap.get(doc.Department_ID)?.Department_Name || doc.Specialty;
-            const chambersCount = Math.max(1, chamberCountByDoctor.get(doc.Doctor_ID) || 0);
+            const subAreaText = (doc.Sub_Area || doc.areaName || area?.Area_Name || '').trim();
+            const hospitalText = (hospital?.Hospital_Name || doc.Primary_Hospital_ID || '').trim();
             const docType = getDoctorType(doc);
             const schedule = getDoctorSchedule(doc, dataset.Chambers);
+            const visitingSummary = [schedule.days, schedule.hours].filter(Boolean).join(' · ');
 
             return (
               <div
@@ -456,83 +366,98 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
                     setSelectedDoctorId(doc.Doctor_ID);
                   }
                 }}
-                className="group cursor-pointer rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 hover:border-[#0E7C7B] p-5 flex flex-col justify-between transition-colors focus-visible:outline-2 focus-visible:outline-[#0E7C7B]"
+                className="group cursor-pointer rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 hover:border-[#0E7C7B] p-3.5 sm:p-4 flex flex-col justify-between gap-2.5 transition-colors focus-visible:outline-2 focus-visible:outline-[#0E7C7B]"
               >
-                <div>
+                <div className="space-y-1.5">
+                  {/* Name + Regular/Guest Pill */}
                   <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h2 className="font-display font-bold text-base text-[#0D2B45] dark:text-white group-hover:text-[#0E7C7B] dark:group-hover:text-[#149A99] transition-colors truncate">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <h2 className="font-display font-bold text-[15px] text-[#0D2B45] dark:text-white group-hover:text-[#0E7C7B] dark:group-hover:text-[#22E3D0] transition-colors truncate">
                           {doc.Doctor_Name}
                         </h2>
                         <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold shrink-0 ${
+                          className={`inline-flex items-center px-1.5 py-0.5 rounded-md text-[10.5px] font-bold shrink-0 ${
                             docType === 'Guest'
                               ? 'bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300'
-                              : 'bg-[#EBF4FA] text-[#0E7C7B] dark:bg-[#0E7C7B]/20 dark:text-[#149A99]'
+                              : 'bg-[#E6FBF3] text-[#0E7C7B] dark:bg-[#0E7C7B]/20 dark:text-[#22E3D0]'
                           }`}
                         >
                           {docType === 'Guest' ? 'Guest' : 'Regular'}
                         </span>
                       </div>
-                      <p className="text-xs text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 mt-0.5 truncate">
-                        {doc.Degree}
-                      </p>
+
+                      {/* Degree & Specialty Inline */}
+                      {(doc.Degree || deptName) && (
+                        <p className="text-xs text-[#0D2B45]/70 dark:text-[#EBF4FA]/70 mt-0.5 truncate">
+                          {doc.Degree && <span>{doc.Degree}</span>}
+                          {doc.Degree && deptName && (
+                            <span className="mx-1.5 text-[#0D2B45]/35 dark:text-[#EBF4FA]/35">·</span>
+                          )}
+                          {deptName && (
+                            <span className="font-semibold text-[#0E7C7B] dark:text-[#22E3D0]">
+                              {deptName}
+                            </span>
+                          )}
+                        </p>
+                      )}
                     </div>
-                    <ChevronRight className="w-4 h-4 text-[#0D2B45]/40 dark:text-[#EBF4FA]/40 group-hover:text-[#0E7C7B] shrink-0 mt-1" />
+                    <ChevronRight className="w-4 h-4 text-[#0D2B45]/35 dark:text-[#EBF4FA]/35 group-hover:text-[#0E7C7B] shrink-0 mt-0.5" />
                   </div>
 
-                  {/* Specialist & ID */}
-                  <div className="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[#0E7C7B] dark:text-[#149A99] font-medium">
-                    <span>{deptName || 'Specialist'}</span>
-                    <span aria-hidden="true">·</span>
-                    <span className="font-mono text-[#0D2B45]/55 dark:text-[#EBF4FA]/55">
-                      {doc.Doctor_ID}
-                    </span>
-                  </div>
+                  {/* Hospital · Sub-Area · Visiting Time (Compact & Crisp) */}
+                  <div className="pt-2 border-t border-[#0D2B45]/8 dark:border-[#EBF4FA]/8 space-y-1 text-xs text-[#0D2B45]/75 dark:text-[#EBF4FA]/75">
+                    {(hospitalText || subAreaText) && (
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                        {hospitalText && (
+                          <span className="inline-flex items-center gap-1 min-w-0">
+                            <Building2 className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#22E3D0] shrink-0" />
+                            <span className="font-medium text-[#0D2B45] dark:text-white truncate">
+                              {hospitalText}
+                            </span>
+                          </span>
+                        )}
+                        {hospitalText && subAreaText && (
+                          <span className="text-[#0D2B45]/35 dark:text-[#EBF4FA]/35">·</span>
+                        )}
+                        {subAreaText && (
+                          <span className="inline-flex items-center gap-1 min-w-0">
+                            <MapPin className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#22E3D0] shrink-0" />
+                            <span className="font-medium truncate">{subAreaText}</span>
+                          </span>
+                        )}
+                      </div>
+                    )}
 
-                  {/* Hospital as Chamber + Area + Visiting Schedule */}
-                  <div className="mt-3 pt-3 border-t border-[#0D2B45]/8 dark:border-[#EBF4FA]/8 space-y-1.5 text-xs text-[#0D2B45]/75 dark:text-[#EBF4FA]/75">
-                    <div className="flex items-start gap-1.5">
-                      <Building2 className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#149A99] shrink-0 mt-0.5" />
-                      <span className="truncate">
-                        <span className="text-[#0D2B45]/50 dark:text-[#EBF4FA]/50">Chamber: </span>
-                        <span className="font-medium text-[#0D2B45] dark:text-white">
-                          {hospital?.Hospital_Name || doc.Primary_Hospital_ID || '—'}
-                        </span>
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <MapPin className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#149A99] shrink-0" />
-                      <span className="truncate font-medium text-[#0D2B45] dark:text-[#EBF4FA]">
-                        {doc.Sub_Area || doc.areaName || area?.Area_Name || '—'}
-                      </span>
-                    </div>
-                    {(schedule.days || schedule.hours) && (
-                      <div className="pt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[#0D2B45]/80 dark:text-[#EBF4FA]/80">
-                        {schedule.days && (
-                          <span className="inline-flex items-center gap-1 font-medium">
-                            <Calendar className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#149A99] shrink-0" />
-                            <span>{schedule.days}</span>
-                          </span>
-                        )}
-                        {schedule.hours && (
-                          <span className="inline-flex items-center gap-1 font-mono">
-                            <Clock className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#149A99] shrink-0" />
-                            <span>{schedule.hours}</span>
-                          </span>
-                        )}
+                    {visitingSummary && (
+                      <div className="flex items-center gap-1.5 text-[11.5px] text-[#0D2B45]/70 dark:text-[#EBF4FA]/70">
+                        <Clock className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#22E3D0] shrink-0" />
+                        <span className="truncate">{visitingSummary}</span>
                       </div>
                     )}
                   </div>
                 </div>
 
-                <div className="mt-4 pt-3 border-t border-[#0D2B45]/8 dark:border-[#EBF4FA]/8 flex items-center justify-between gap-2 text-xs">
-                  <span className="text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 tabular-nums truncate">
-                    {chambersCount} chamber{chambersCount === 1 ? '' : 's'}
-                    {doc.Phone ? ` · ${doc.Phone}` : ''}
-                  </span>
-                  <div className="flex items-center gap-1.5 shrink-0">
+                {/* Compact Footer: Phone + Edit / Delete / Detailing */}
+                <div className="pt-2 border-t border-[#0D2B45]/8 dark:border-[#EBF4FA]/8 flex items-center justify-between gap-2 text-xs">
+                  <div className="min-w-0 truncate">
+                    {doc.Phone ? (
+                      <a
+                        href={`tel:${doc.Phone}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="inline-flex items-center gap-1 font-mono text-[11.5px] text-[#0D2B45]/70 dark:text-[#EBF4FA]/75 hover:text-[#0E7C7B] hover:underline"
+                      >
+                        <Phone className="w-3 h-3 text-[#0E7C7B] dark:text-[#22E3D0] shrink-0" />
+                        <span className="truncate">{doc.Phone}</span>
+                      </a>
+                    ) : (
+                      <span className="text-[11px] text-[#0D2B45]/40 dark:text-[#EBF4FA]/40">
+                        Tap for profile
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1 shrink-0">
                     {!isReadOnlySuperiorView && (
                       <>
                         <button
@@ -543,9 +468,9 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
                           }}
                           aria-label={`Edit ${doc.Doctor_Name}`}
                           title="Edit doctor"
-                          className="min-h-[44px] min-w-[44px] sm:min-h-[36px] sm:min-w-[36px] flex items-center justify-center rounded-xl sm:rounded-lg text-[#0D2B45]/65 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/65 dark:hover:text-[#149A99] hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/60"
+                          className="min-h-[34px] min-w-[34px] flex items-center justify-center rounded-lg text-[#0D2B45]/60 hover:text-[#0E7C7B] dark:text-[#EBF4FA]/60 dark:hover:text-[#22E3D0] hover:bg-[#EBF4FA] dark:hover:bg-[#133859]/60 cursor-pointer"
                         >
-                          <Pencil className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
+                          <Pencil className="w-3.5 h-3.5" />
                         </button>
                         <button
                           type="button"
@@ -559,9 +484,9 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
                           }}
                           aria-label={`Delete ${doc.Doctor_Name}`}
                           title="Delete doctor"
-                          className="min-h-[44px] min-w-[44px] sm:min-h-[36px] sm:min-w-[36px] flex items-center justify-center rounded-xl sm:rounded-lg text-[#0D2B45]/55 hover:text-rose-600 dark:text-[#EBF4FA]/55 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                          className="min-h-[34px] min-w-[34px] flex items-center justify-center rounded-lg text-[#0D2B45]/55 hover:text-rose-600 dark:text-[#EBF4FA]/55 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 cursor-pointer"
                         >
-                          <Trash2 className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
+                          <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </>
                     )}
@@ -571,7 +496,7 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
                         e.stopPropagation();
                         startDetailingFlow({ specialist: doc.Specialty, subTab: 'detailing' });
                       }}
-                      className="min-h-[44px] sm:min-h-[36px] px-3 sm:px-2.5 rounded-xl bg-[#EBF4FA] sm:bg-transparent dark:bg-[#133859] sm:dark:bg-transparent font-semibold text-[#0E7C7B] dark:text-[#7CE0DF] sm:dark:text-[#149A99] hover:underline whitespace-nowrap shrink-0 inline-flex items-center justify-center"
+                      className="min-h-[34px] px-2.5 rounded-lg bg-[#EBF4FA] dark:bg-[#133859] font-semibold text-xs text-[#0E7C7B] dark:text-[#7CE0DF] hover:bg-[#dcecf7] dark:hover:bg-[#1B4A73] whitespace-nowrap shrink-0 inline-flex items-center justify-center cursor-pointer transition-colors"
                     >
                       Detailing
                     </button>
@@ -642,8 +567,7 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
                 <div className="flex items-center gap-2 flex-wrap">
                   <p className="text-xs font-medium text-[#0E7C7B] dark:text-[#149A99]">
                     {departmentMap.get(selectedDoctor.Department_ID)?.Department_Name ||
-                      selectedDoctor.Specialty}{' '}
-                    · <span className="font-mono">{selectedDoctor.Doctor_ID}</span>
+                      selectedDoctor.Specialty}
                   </p>
                   <span
                     className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold ${

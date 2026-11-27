@@ -53,6 +53,29 @@ function clampString(val: unknown, maxLen: number): string {
   return String(val ?? '').trim().slice(0, maxLen);
 }
 
+/**
+ * Recursively removes keys with `undefined` values before passing objects to
+ * Firestore `setDoc` / `updateDoc`, while preserving arrays and Firestore
+ * `FieldValue` sentinels (e.g. `arrayUnion`, `arrayRemove`).
+ */
+export function omitUndefined<T extends Record<string, unknown>>(obj: T): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value === undefined) continue;
+    if (
+      value !== null &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      Object.getPrototypeOf(value) === Object.prototype
+    ) {
+      out[key] = omitUndefined(value as Record<string, unknown>);
+    } else {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
 function sanitizeDocId(raw: string, fallbackPrefix: string): string {
   const cleaned = String(raw ?? '')
     .trim()
@@ -338,7 +361,7 @@ export async function saveUserAndAreaDocs(
       updatedAt: now,
       updatedBy: user.uid,
     };
-    await setDoc(doc(db, 'teams', teamId), teamDoc, { merge: true });
+    await setDoc(doc(db, 'teams', teamId), omitUndefined(teamDoc as unknown as Record<string, unknown>), { merge: true });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, teamPath);
   }
@@ -346,7 +369,7 @@ export async function saveUserAndAreaDocs(
   // 2. Write users/{uid} profile pointing to their private teamId
   const userPath = `users/${user.uid}`;
   try {
-    await setDoc(doc(db, 'users', user.uid), profile, { merge: true });
+    await setDoc(doc(db, 'users', user.uid), omitUndefined(profile as unknown as Record<string, unknown>), { merge: true });
     saveCachedFirebaseProfile(profile);
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, userPath);
@@ -356,7 +379,7 @@ export async function saveUserAndAreaDocs(
   try {
     await setDoc(
       doc(db, 'joinCodes', joinCode),
-      {
+      omitUndefined({
         joinCode,
         teamId,
         territoryName,
@@ -366,7 +389,7 @@ export async function saveUserAndAreaDocs(
         upazila,
         updatedBy: user.uid,
         updatedAt: now,
-      },
+      }),
       { merge: true }
     );
   } catch {
@@ -393,7 +416,11 @@ export async function saveUserAndAreaDocs(
       updatedAt: now,
       updatedBy: user.uid,
     };
-    await setDoc(doc(db, 'teams', teamId, 'members', user.uid), memberDoc, { merge: true });
+    await setDoc(
+      doc(db, 'teams', teamId, 'members', user.uid),
+      omitUndefined(memberDoc as unknown as Record<string, unknown>),
+      { merge: true }
+    );
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, memberPath);
   }
@@ -577,7 +604,7 @@ async function migrateLegacyProfileToPrivateTeam(
     if (!existing || !existing.exists()) {
       await setDoc(
         teamRef,
-        {
+        omitUndefined({
           teamId,
           territoryName: profile.territoryName,
           district: profile.district || '',
@@ -589,7 +616,7 @@ async function migrateLegacyProfileToPrivateTeam(
           createdAt: profile.createdAt || now,
           updatedAt: now,
           updatedBy: uid,
-        },
+        }),
         { merge: true }
       );
     }
@@ -597,21 +624,21 @@ async function migrateLegacyProfileToPrivateTeam(
     // Update users/{uid} with new private teamId
     await setDoc(
       doc(db, 'users', uid),
-      {
+      omitUndefined({
         teamId,
         territoryName: profile.territoryName,
         areaId: teamId,
         areaName: profile.territoryName,
         joinCode: profile.joinCode || deriveAreaJoinCode(teamId),
         updatedAt: now,
-      },
+      }),
       { merge: true }
     );
 
     // Ensure officer is in teams/{teamId}/members/{uid}
     await setDoc(
       doc(db, 'teams', teamId, 'members', uid),
-      {
+      omitUndefined({
         MPO_ID: uid,
         MPO_Name: profile.officerName,
         Role: profile.role || 'MPO',
@@ -627,7 +654,7 @@ async function migrateLegacyProfileToPrivateTeam(
         Status: 'Active',
         updatedAt: now,
         updatedBy: uid,
-      },
+      }),
       { merge: true }
     );
 
@@ -675,24 +702,40 @@ export async function updateTeamTerritoryName(params: {
     throw new Error('Territory name cannot be empty.');
   }
   const nextDistrict =
-    params.district !== undefined ? clampString(params.district, 80) : profile.district;
+    params.district !== undefined ? clampString(params.district, 80) : profile.district || '';
   const nextUpazila =
-    params.upazila !== undefined ? clampString(params.upazila, 80) : profile.upazila;
+    params.upazila !== undefined ? clampString(params.upazila, 80) : profile.upazila || '';
   const joinCode = profile.joinCode || deriveAreaJoinCode(teamId);
 
+  const teamRef = doc(db, 'teams', teamId);
   const teamPath = `teams/${teamId}`;
+  const existingTeam = await getDoc(teamRef).catch(() => null);
+  const teamPayload =
+    existingTeam && existingTeam.exists()
+      ? omitUndefined({
+          territoryName: nextTerritoryName,
+          district: nextDistrict,
+          upazila: nextUpazila,
+          joinCode,
+          updatedBy: profile.uid,
+          updatedAt: now,
+        })
+      : omitUndefined({
+          teamId,
+          territoryName: nextTerritoryName,
+          district: nextDistrict,
+          upazila: nextUpazila,
+          joinCode,
+          ownerUid: profile.uid,
+          members: [profile.uid],
+          superiorUids: [],
+          createdAt: profile.createdAt || now,
+          updatedBy: profile.uid,
+          updatedAt: now,
+        });
+
   await commitFirestoreMutation(
-    setDoc(
-      doc(db, 'teams', teamId),
-      {
-        territoryName: nextTerritoryName,
-        district: nextDistrict,
-        upazila: nextUpazila,
-        updatedBy: profile.uid,
-        updatedAt: now,
-      },
-      { merge: true }
-    ),
+    setDoc(teamRef, teamPayload, { merge: true }),
     OperationType.UPDATE,
     teamPath
   );
@@ -710,7 +753,11 @@ export async function updateTeamTerritoryName(params: {
   };
 
   await commitFirestoreMutation(
-    setDoc(doc(db, 'users', profile.uid), updatedProfile, { merge: true }),
+    setDoc(
+      doc(db, 'users', profile.uid),
+      omitUndefined(updatedProfile as unknown as Record<string, unknown>),
+      { merge: true }
+    ),
     OperationType.UPDATE,
     `users/${profile.uid}`
   );
@@ -719,7 +766,7 @@ export async function updateTeamTerritoryName(params: {
   // Sync joinCodes/{joinCode} and member card (best-effort)
   void setDoc(
     doc(db, 'joinCodes', joinCode),
-    {
+    omitUndefined({
       joinCode,
       teamId,
       territoryName: nextTerritoryName,
@@ -729,18 +776,18 @@ export async function updateTeamTerritoryName(params: {
       upazila: nextUpazila,
       updatedBy: profile.uid,
       updatedAt: now,
-    },
+    }),
     { merge: true }
   ).catch(() => {});
 
   void setDoc(
     doc(db, 'teams', teamId, 'members', profile.uid),
-    {
+    omitUndefined({
       Area: nextTerritoryName,
       Territory: [nextDistrict, nextUpazila].filter(Boolean).join(' · '),
       updatedAt: now,
       updatedBy: profile.uid,
-    },
+    }),
     { merge: true }
   ).catch(() => {});
 
@@ -1120,7 +1167,11 @@ export async function saveTeamSubArea(
     updatedBy: uid,
   };
   await commitFirestoreMutation(
-    setDoc(doc(db, 'teams', teamId, 'areas', docId), payload, { merge: true }),
+    setDoc(
+      doc(db, 'teams', teamId, 'areas', docId),
+      omitUndefined(payload as unknown as Record<string, unknown>),
+      { merge: true }
+    ),
     OperationType.WRITE,
     path
   );
@@ -1168,7 +1219,7 @@ export async function saveAreaDoctor(
     updatedBy: uid,
   };
   await commitFirestoreMutation(
-    setDoc(doc(db, 'teams', teamId, 'doctors', docId), payload, { merge: true }),
+    setDoc(doc(db, 'teams', teamId, 'doctors', docId), omitUndefined(payload), { merge: true }),
     OperationType.WRITE,
     path
   );
@@ -1206,7 +1257,7 @@ export async function saveAreaChamber(
     updatedBy: uid,
   };
   await commitFirestoreMutation(
-    setDoc(doc(db, 'teams', teamId, 'chambers', docId), payload, { merge: true }),
+    setDoc(doc(db, 'teams', teamId, 'chambers', docId), omitUndefined(payload), { merge: true }),
     OperationType.WRITE,
     path
   );
@@ -1245,7 +1296,7 @@ export async function saveAreaHospital(
     updatedBy: uid,
   };
   await commitFirestoreMutation(
-    setDoc(doc(db, 'teams', teamId, 'hospitals', docId), payload, { merge: true }),
+    setDoc(doc(db, 'teams', teamId, 'hospitals', docId), omitUndefined(payload), { merge: true }),
     OperationType.WRITE,
     path
   );
@@ -1290,7 +1341,7 @@ export async function saveAreaMember(
     updatedBy: uid,
   };
   await commitFirestoreMutation(
-    setDoc(doc(db, 'teams', teamId, 'members', docId), payload, { merge: true }),
+    setDoc(doc(db, 'teams', teamId, 'members', docId), omitUndefined(payload), { merge: true }),
     OperationType.WRITE,
     path
   );
@@ -1334,7 +1385,11 @@ export async function saveAreaNote(
     Updated_At: now,
   };
   await commitFirestoreMutation(
-    setDoc(doc(db, 'teams', teamId, 'notes', docId), payload, { merge: true }),
+    setDoc(
+      doc(db, 'teams', teamId, 'notes', docId),
+      omitUndefined(payload as unknown as Record<string, unknown>),
+      { merge: true }
+    ),
     OperationType.WRITE,
     path
   );
@@ -1372,7 +1427,7 @@ export async function ensureAreaJoinCodeRegistered(profile: FirebaseUserProfile)
     if (!snap || !snap.exists()) {
       await setDoc(
         teamRef,
-        {
+        omitUndefined({
           teamId,
           territoryName,
           district: profile.district || '',
@@ -1384,7 +1439,7 @@ export async function ensureAreaJoinCodeRegistered(profile: FirebaseUserProfile)
           createdAt: profile.createdAt || now,
           updatedAt: now,
           updatedBy: profile.uid,
-        },
+        }),
         { merge: true }
       );
     }
@@ -1395,7 +1450,7 @@ export async function ensureAreaJoinCodeRegistered(profile: FirebaseUserProfile)
   try {
     await setDoc(
       doc(db, 'users', profile.uid),
-      {
+      omitUndefined({
         teamId,
         territoryName,
         areaId: teamId,
@@ -1403,7 +1458,7 @@ export async function ensureAreaJoinCodeRegistered(profile: FirebaseUserProfile)
         joinCode,
         ...(emailLower ? { emailLower } : {}),
         ...(phoneNormalized ? { phoneNormalized } : {}),
-      },
+      }),
       { merge: true }
     );
   } catch {
@@ -1413,7 +1468,7 @@ export async function ensureAreaJoinCodeRegistered(profile: FirebaseUserProfile)
   try {
     await setDoc(
       doc(db, 'joinCodes', joinCode),
-      {
+      omitUndefined({
         joinCode,
         teamId,
         territoryName,
@@ -1423,7 +1478,7 @@ export async function ensureAreaJoinCodeRegistered(profile: FirebaseUserProfile)
         upazila: profile.upazila || '',
         updatedBy: profile.uid,
         updatedAt: now,
-      },
+      }),
       { merge: true }
     );
   } catch {
@@ -1538,7 +1593,11 @@ export async function sendTeamInvite(params: {
     updatedAt: now,
   };
 
-  await setDoc(doc(db, 'invites', inviteId), invite, { merge: true });
+  await setDoc(
+    doc(db, 'invites', inviteId),
+    omitUndefined(invite as unknown as Record<string, unknown>),
+    { merge: true }
+  );
   return invite;
 }
 
@@ -1609,13 +1668,16 @@ async function switchUserToSharedTeam(
   const joinCode = target.joinCode || deriveAreaJoinCode(target.teamId);
 
   // 1. Add user atomically to teams/{targetTeamId}.members FIRST so rules immediately recognize membership
-  await updateDoc(doc(db, 'teams', target.teamId), {
-    members: arrayUnion(user.uid),
-    ...(target.joinedByCode ? { lastJoinProof: `${joinCode}_${now}` } : {}),
-    updatedAt: now,
-  });
+  await updateDoc(
+    doc(db, 'teams', target.teamId),
+    omitUndefined({
+      members: arrayUnion(user.uid),
+      ...(target.joinedByCode ? { lastJoinProof: `${joinCode}_${now}` } : {}),
+      updatedAt: now,
+    })
+  );
 
-  // 2. Update users/{uid} to point to the shared teamId
+  // 2. Update users/{uid} to point to the shared teamId (stripping all undefined fields)
   const updatedProfile: FirebaseUserProfile = {
     ...currentProfile,
     teamId: target.teamId,
@@ -1627,7 +1689,11 @@ async function switchUserToSharedTeam(
     joinCode,
     updatedAt: now,
   };
-  await setDoc(doc(db, 'users', user.uid), updatedProfile, { merge: true });
+  await setDoc(
+    doc(db, 'users', user.uid),
+    omitUndefined(updatedProfile as unknown as Record<string, unknown>),
+    { merge: true }
+  );
   saveCachedFirebaseProfile(updatedProfile);
 
   // 3. Add/update the officer in teams/{targetTeamId}/members/{uid}
@@ -1648,9 +1714,11 @@ async function switchUserToSharedTeam(
     updatedAt: now,
     updatedBy: user.uid,
   };
-  await setDoc(doc(db, 'teams', updatedProfile.teamId, 'members', user.uid), memberDoc, {
-    merge: true,
-  });
+  await setDoc(
+    doc(db, 'teams', updatedProfile.teamId, 'members', user.uid),
+    omitUndefined(memberDoc as unknown as Record<string, unknown>),
+    { merge: true }
+  );
 
   return updatedProfile;
 }
@@ -1677,10 +1745,13 @@ export async function acceptTeamInvite(
 
   if (invite.inviteType === 'superior') {
     // 1. Atomically add Superior UID to teams/{targetTeamId}.superiorUids
-    await updateDoc(doc(db, 'teams', targetTeamId), {
-      superiorUids: arrayUnion(user.uid),
-      updatedAt: now,
-    });
+    await updateDoc(
+      doc(db, 'teams', targetTeamId),
+      omitUndefined({
+        superiorUids: arrayUnion(user.uid),
+        updatedAt: now,
+      })
+    );
 
     // 2. Write Superior metadata card under teams/{targetTeamId}/superiors/{uid}
     const superiorDoc: TeamSuperior = {
@@ -1693,14 +1764,16 @@ export async function acceptTeamInvite(
       invitedByUid: invite.fromUid,
       invitedByName: invite.fromName,
     };
-    await setDoc(doc(db, 'teams', targetTeamId, 'superiors', user.uid), superiorDoc, {
-      merge: true,
-    });
+    await setDoc(
+      doc(db, 'teams', targetTeamId, 'superiors', user.uid),
+      omitUndefined(superiorDoc as unknown as Record<string, unknown>),
+      { merge: true }
+    );
 
     // 3. Mark invite accepted
     await setDoc(
       doc(db, 'invites', invite.inviteId),
-      { status: 'accepted', updatedAt: now },
+      omitUndefined({ status: 'accepted', updatedAt: now }),
       { merge: true }
     );
 
@@ -1723,7 +1796,7 @@ export async function acceptTeamInvite(
 
   await setDoc(
     doc(db, 'invites', invite.inviteId),
-    { status: 'accepted', updatedAt: now },
+    omitUndefined({ status: 'accepted', updatedAt: now }),
     { merge: true }
   );
 
@@ -1746,11 +1819,14 @@ export async function revokeSuperiorAccess(
 ): Promise<void> {
   const now = new Date().toISOString();
   await commitFirestoreMutation(
-    updateDoc(doc(db, 'teams', teamId), {
-      superiorUids: arrayRemove(superiorUid),
-      updatedBy: actorUid,
-      updatedAt: now,
-    }),
+    updateDoc(
+      doc(db, 'teams', teamId),
+      omitUndefined({
+        superiorUids: arrayRemove(superiorUid),
+        updatedBy: actorUid,
+        updatedAt: now,
+      })
+    ),
     OperationType.UPDATE,
     `teams/${teamId}`
   );
@@ -1767,13 +1843,15 @@ export async function revokeSuperiorAccess(
 export async function declineTeamInvite(inviteId: string): Promise<void> {
   await setDoc(
     doc(db, 'invites', inviteId),
-    { status: 'declined', updatedAt: new Date().toISOString() },
+    omitUndefined({ status: 'declined', updatedAt: new Date().toISOString() }),
     { merge: true }
   );
 }
 
 /**
  * Joins an existing shared Team immediately using its short Join Code (e.g. DI-4829).
+ * Queries `teams` where `joinCode == normalizedCode` first, with seamless fallback
+ * to `joinCodes/{normalizedCode}`, adds `uid` via `arrayUnion(uid)`, and updates `users/{uid}.teamId`.
  */
 export async function joinTeamByCode(
   user: User,
@@ -1793,17 +1871,24 @@ export async function joinTeamByCode(
     upazila?: string;
     joinCode?: string;
   } | null = null;
+  let lastError: unknown = null;
 
-  // Direct lookup in joinCodes/{DI-XXXX}
+  // 1. Primary lookup: query `teams` where `joinCode == normalizedCode`
   try {
-    const codeSnap = await getDoc(doc(db, 'joinCodes', normalizedCode));
-    if (codeSnap.exists()) {
-      const d = codeSnap.data() as Record<string, unknown>;
-      const resolvedId = String(d.teamId || d.areaId || '').trim();
+    const teamQuery = query(
+      collection(db, 'teams'),
+      where('joinCode', '==', normalizedCode),
+      limit(1)
+    );
+    const snap = await getDocs(teamQuery);
+    if (!snap.empty) {
+      const first = snap.docs[0];
+      const d = first.data() as Partial<TeamWorkspaceMeta>;
+      const resolvedId = String(d.teamId || first.id).trim();
       if (resolvedId) {
         target = {
           teamId: resolvedId,
-          territoryName: String(d.territoryName || d.areaName || resolvedId),
+          territoryName: String(d.territoryName || resolvedId),
           district: d.district ? String(d.district) : '',
           upazila: d.upazila ? String(d.upazila) : '',
           joinCode: String(d.joinCode || normalizedCode),
@@ -1811,10 +1896,35 @@ export async function joinTeamByCode(
       }
     }
   } catch (err) {
-    throw new Error(formatFirebaseAuthError(err));
+    lastError = err;
+  }
+
+  // 2. Fallback lookup: direct `joinCodes/{DI-XXXX}` document
+  if (!target) {
+    try {
+      const codeSnap = await getDoc(doc(db, 'joinCodes', normalizedCode));
+      if (codeSnap.exists()) {
+        const d = codeSnap.data() as Record<string, unknown>;
+        const resolvedId = String(d.teamId || d.areaId || '').trim();
+        if (resolvedId) {
+          target = {
+            teamId: resolvedId,
+            territoryName: String(d.territoryName || d.areaName || resolvedId),
+            district: d.district ? String(d.district) : '',
+            upazila: d.upazila ? String(d.upazila) : '',
+            joinCode: String(d.joinCode || normalizedCode),
+          };
+        }
+      }
+    } catch (err) {
+      if (!lastError) lastError = err;
+    }
   }
 
   if (!target) {
+    if (lastError) {
+      throw new Error(formatFirebaseAuthError(lastError));
+    }
     throw new Error(
       `No Team found for code "${normalizedCode}". Double-check the Join Code shared by your teammate.`
     );
