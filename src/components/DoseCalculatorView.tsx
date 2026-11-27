@@ -7,10 +7,11 @@ import {
   BookOpen,
   Calculator,
   Check,
+  ChevronDown,
   Clock,
   Copy,
   Droplets,
-  Pill,
+  Pencil,
   RefreshCw,
   Search,
   ShieldAlert,
@@ -41,7 +42,6 @@ import {
   buildCatalogFallbackDoseCalculation,
   STANDARD_CATALOG_REFERENCE_LABEL,
 } from '../services/doseFallback';
-import { StickyBackBar } from './StickyBackBar';
 
 const DOSAGE_FORM_OPTIONS = [
   'Suspension / PFS',
@@ -67,12 +67,10 @@ const COMMON_INDICATIONS = [
   'Fever / Pain',
 ];
 
-const QUICK_WEIGHTS_KG = [6, 10, 12, 15, 20, 25, 30];
-
 export const DoseCalculatorView: React.FC = () => {
   const {
     dataset,
-    setActiveTab,
+    navigateHome,
     openProductBrief,
     startDetailingFlow,
     pushToast,
@@ -85,6 +83,7 @@ export const DoseCalculatorView: React.FC = () => {
   const [genericName, setGenericName] = useState('');
   const [strength, setStrength] = useState('');
   const [dosageForm, setDosageForm] = useState('');
+  const [isEditingStrength, setIsEditingStrength] = useState(false);
 
   // Patient & Clinical input state
   const [patientMode, setPatientMode] = useState<DosePatientMode>('both');
@@ -103,6 +102,7 @@ export const DoseCalculatorView: React.FC = () => {
   const [copiedSummary, setCopiedSummary] = useState(false);
 
   const comboboxRef = useRef<HTMLDivElement | null>(null);
+  const resultsRef = useRef<HTMLDivElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const requestSeqRef = useRef(0);
 
@@ -250,6 +250,7 @@ export const DoseCalculatorView: React.FC = () => {
     setGenericName(gen);
     setStrength(str);
     setDosageForm(form);
+    setIsEditingStrength(false);
     setIsDropdownOpen(false);
     setFormValidationError(null);
 
@@ -310,6 +311,7 @@ export const DoseCalculatorView: React.FC = () => {
     setGenericName('');
     setStrength('');
     setDosageForm('');
+    setIsEditingStrength(false);
     setWeightInput('');
     setAgeValue('');
     setIndication('');
@@ -465,62 +467,74 @@ export const DoseCalculatorView: React.FC = () => {
 
   const showPediatricInputs = patientMode === 'pediatric' || patientMode === 'both';
   const showAdultInputs = patientMode === 'adult' || patientMode === 'both';
+  const hasSelectedOrTypedDrug = Boolean((genericName || searchInput).trim());
+
+  const scrollToResultsSoon = () => {
+    window.setTimeout(() => {
+      resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 80);
+  };
+
+  const handleSubmitAndScroll = (e: React.FormEvent) => {
+    handleFormSubmit(e);
+    scrollToResultsSoon();
+  };
 
   return (
-    <div className="space-y-6">
-      {/* Sticky Top Back Bar */}
-      <StickyBackBar
-        title="Dose Calculator"
-        subtitle="Pediatric & Adult · mg/kg & liquid mL"
-      />
+    <div className="space-y-3.5 sm:space-y-5">
+      {/* ONLY Top Bar in Full-Screen Dose Calculator: ← Back | Dose Calculator */}
+      <div className="sticky top-0 md:top-16 z-30 -mx-3.5 sm:-mx-6 px-3.5 sm:px-6 pt-safe bg-white dark:bg-[#0B1E30] border-b border-[#0D2B45]/10 dark:border-[#EBF4FA]/10">
+        <div className="h-[50px] flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              type="button"
+              onClick={navigateHome}
+              aria-label="Back to Home Dashboard"
+              className="min-h-[44px] -ml-1.5 px-2.5 rounded-xl text-[#0E7C7B] dark:text-[#22E3D0] hover:bg-[#EBF4FA] dark:hover:bg-white/10 text-sm font-semibold inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-colors active:scale-[0.97] cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4 shrink-0" />
+              <span>Back</span>
+            </button>
 
-      {/* Page Header */}
-      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-[#0D2B45] dark:bg-[#0E7C7B] text-white flex items-center justify-center shrink-0">
-              <Calculator className="w-5 h-5" />
-            </div>
-            <h1 className="text-2xl sm:text-3xl font-display font-bold text-[#0D2B45] dark:text-white tracking-tight">
+            <span
+              aria-hidden="true"
+              className="h-4 w-px bg-[#0D2B45]/15 dark:bg-[#EBF4FA]/15 shrink-0"
+            />
+
+            <h1 className="font-display font-bold text-[15px] sm:text-base text-[#0D2B45] dark:text-white truncate">
               Dose Calculator
             </h1>
           </div>
-          <p className="text-sm text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 mt-1">
-            Pediatric &amp; Adult dosing reference with exact mg/kg &amp; liquid mL conversion for Drug International Limited products.
-          </p>
-        </div>
 
-        <div className="text-xs font-mono tabular-nums text-[#0D2B45]/60 dark:text-[#EBF4FA]/60">
-          {dataset.Products.length} DIL products searchable
+          {(searchInput || genericName || result || weightInput || indication) && (
+            <button
+              type="button"
+              onClick={handleClearAll}
+              className="min-h-[36px] px-2.5 rounded-lg text-xs font-semibold text-[#0D2B45]/65 hover:text-[#0D2B45] dark:text-[#EBF4FA]/70 dark:hover:text-white hover:bg-[#F4F8FC] dark:hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
+            >
+              Reset
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Input & Configuration Card */}
+      {/* Zero-Scroll Single-Screen Calculator Card */}
       <form
-        onSubmit={handleFormSubmit}
-        className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-4 sm:p-6 space-y-5"
+        onSubmit={handleSubmitAndScroll}
+        className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-3.5 sm:p-5 space-y-3 sm:space-y-4"
       >
-        {/* 1. Smart Product / Generic Autocomplete */}
+        {/* 1. Unified Brand or Generic Search + Compact Auto-Populated Summary Bar */}
         <div ref={comboboxRef} className="relative space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <label
-              htmlFor="dose-product-search"
-              className="text-xs sm:text-sm font-semibold text-[#0D2B45] dark:text-white flex items-center gap-1.5"
-            >
-              <Pill className="w-4 h-4 text-[#0E7C7B] dark:text-[#149A99]" />
-              <span>Brand Name or Generic Name</span>
-              <span className="text-rose-500">*</span>
-            </label>
-            {selectedProduct && (
-              <span className="text-[11px] font-semibold text-[#0E7C7B] dark:text-[#8EEAE8]">
-                Selected from DIL Products Sheet
-              </span>
-            )}
-          </div>
+          <label
+            htmlFor="dose-product-search"
+            className="block text-xs font-semibold text-[#0D2B45] dark:text-white"
+          >
+            Brand or Generic <span className="text-rose-500">*</span>
+          </label>
 
           <div className="relative">
             <Search
-              className="w-4 h-4 text-[#0D2B45]/45 dark:text-[#EBF4FA]/45 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none"
+              className="w-4 h-4 text-[#0D2B45]/45 dark:text-[#EBF4FA]/45 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
               aria-hidden="true"
             />
             <input
@@ -529,9 +543,9 @@ export const DoseCalculatorView: React.FC = () => {
               value={searchInput}
               onFocus={() => setIsDropdownOpen(true)}
               onChange={(e) => handleSearchInputChange(e.target.value)}
-              placeholder='Search DI Brand or Generic (e.g., "T-Cef 100mg/5ml", "Cefixime", "Fuclav 500mg", "Linzo")...'
+              placeholder='Search DI Brand or Generic (e.g., T-Cef, Cefixime, Fuclav)'
               autoComplete="off"
-              className="w-full min-h-[48px] pl-10 pr-11 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-sm text-[#0D2B45] dark:text-white placeholder:text-[#0D2B45]/45 dark:placeholder:text-[#EBF4FA]/40 focus:outline-none focus:border-[#0E7C7B]"
+              className="w-full min-h-[44px] pl-9 pr-10 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-sm text-[#0D2B45] dark:text-white placeholder:text-[#0D2B45]/45 dark:placeholder:text-[#EBF4FA]/40 focus:outline-none focus:border-[#0E7C7B]"
             />
             {searchInput && (
               <button
@@ -542,10 +556,11 @@ export const DoseCalculatorView: React.FC = () => {
                   setGenericName('');
                   setStrength('');
                   setDosageForm('');
+                  setIsEditingStrength(false);
                   setIsDropdownOpen(true);
                 }}
                 aria-label="Clear product search"
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 min-w-[40px] min-h-[40px] rounded-lg flex items-center justify-center text-[#0D2B45]/50 hover:text-[#0D2B45] dark:text-[#EBF4FA]/50 dark:hover:text-white hover:bg-[#EBF4FA] dark:hover:bg-[#133859] cursor-pointer"
+                className="absolute right-1 top-1/2 -translate-y-1/2 min-w-[40px] min-h-[40px] rounded-lg flex items-center justify-center text-[#0D2B45]/50 hover:text-[#0D2B45] dark:text-[#EBF4FA]/50 dark:hover:text-white cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -554,123 +569,115 @@ export const DoseCalculatorView: React.FC = () => {
 
           {/* Autocomplete Dropdown */}
           {isDropdownOpen && (
-            <div className="absolute z-30 left-0 right-0 mt-1 max-h-72 overflow-y-auto rounded-xl bg-white dark:bg-[#0A1C2D] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 shadow-xl divide-y divide-[#0D2B45]/8 dark:divide-[#EBF4FA]/8">
+            <div className="absolute z-30 left-0 right-0 mt-1 max-h-64 overflow-y-auto rounded-xl bg-white dark:bg-[#0A1C2D] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 shadow-xl divide-y divide-[#0D2B45]/8 dark:divide-[#EBF4FA]/8">
               {productMatches.length > 0 ? (
                 productMatches.map((prod, idx) => {
                   const brand = prod.Brand_Name || prod.Product_Name || prod.Product_ID;
-                  const grp = normalizeProductGroup(prod.Product_Group);
                   const isLiq = isLiquidDosageForm(prod.Dosage_Form, prod.Strength);
                   return (
                     <button
                       key={`dc-opt-${prod.Product_ID}-${idx}`}
                       type="button"
                       onClick={() => handleSelectProduct(prod)}
-                      className="w-full px-3.5 py-2.5 text-left hover:bg-[#EBF4FA]/75 dark:hover:bg-[#133859]/60 transition-colors flex items-center justify-between gap-3 cursor-pointer"
+                      className="w-full px-3.5 py-2.5 text-left hover:bg-[#EBF4FA]/75 dark:hover:bg-[#133859]/60 transition-colors flex items-center justify-between gap-2.5 cursor-pointer"
                     >
                       <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="font-display font-bold text-sm text-[#0D2B45] dark:text-white">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <span className="font-display font-bold text-sm text-[#0D2B45] dark:text-white truncate">
                             {brand}
                           </span>
                           {prod.Strength && (
-                            <span className="text-xs font-mono font-semibold text-[#0E7C7B] dark:text-[#8EEAE8]">
+                            <span className="text-xs font-mono font-semibold text-[#0E7C7B] dark:text-[#22E3D0] shrink-0">
                               {prod.Strength}
-                            </span>
-                          )}
-                          {prod.Dosage_Form && (
-                            <span className="text-[11px] px-1.5 py-0.5 rounded bg-[#EBF4FA] dark:bg-[#133859] text-[#0D2B45]/80 dark:text-[#EBF4FA]/85">
-                              {prod.Dosage_Form}
                             </span>
                           )}
                           {isLiq && (
                             <Droplets
-                              className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#149A99]"
+                              className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#22E3D0] shrink-0"
                               aria-hidden="true"
                             />
                           )}
                         </div>
                         <div className="text-xs text-[#0D2B45]/65 dark:text-[#EBF4FA]/65 truncate mt-0.5">
                           {prod.Generic_Name || '—'}
-                          {prod.Therapeutic_Class ? ` · ${prod.Therapeutic_Class}` : ''}
+                          {prod.Dosage_Form ? ` · ${prod.Dosage_Form}` : ''}
                         </div>
                       </div>
-                      {grp && (
-                        <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-[#0D2B45]/10 text-[#0D2B45] dark:bg-[#133859] dark:text-[#EBF4FA] shrink-0">
-                          G-{grp}
-                        </span>
-                      )}
                     </button>
                   );
                 })
               ) : (
-                <div className="px-4 py-3 text-xs text-[#0D2B45]/70 dark:text-[#EBF4FA]/70 flex items-center justify-between gap-2">
-                  <span>
-                    No exact DIL brand match — press <strong>Calculate Dose</strong> to calculate directly for{' '}
-                    <strong className="text-[#0D2B45] dark:text-white">
-                      &ldquo;{searchInput.trim()}&rdquo;
-                    </strong>
-                    .
+                <div className="px-3.5 py-2.5 text-xs text-[#0D2B45]/70 dark:text-[#EBF4FA]/70 flex items-center justify-between gap-2">
+                  <span className="truncate">
+                    Use <strong className="text-[#0D2B45] dark:text-white">{searchInput.trim()}</strong>
                   </span>
                   <button
                     type="button"
                     onClick={() => setIsDropdownOpen(false)}
-                    className="text-[#0E7C7B] dark:text-[#149A99] font-semibold shrink-0 cursor-pointer"
+                    className="text-[#0E7C7B] dark:text-[#22E3D0] font-semibold shrink-0 cursor-pointer"
                   >
-                    Use Manual
+                    Done
                   </button>
                 </div>
               )}
             </div>
           )}
 
-          {/* Pre-filled / Editable Generic, Strength & Dosage Form Row */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
-            <div>
-              <label
-                htmlFor="dose-generic-field"
-                className="block text-[11px] font-semibold uppercase tracking-wider text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 mb-1"
-              >
-                Generic Name
-              </label>
-              <input
-                id="dose-generic-field"
-                type="text"
-                value={genericName}
-                onChange={(e) => {
-                  setGenericName(e.target.value);
-                  setFormValidationError(null);
-                }}
-                placeholder="e.g., Cefixime Trihydrate"
-                className="w-full min-h-[44px] md:h-10 px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-base md:text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
-              />
-            </div>
+          {/* Auto-Populated Single-Line Product Metadata Bar + Tiny Edit Strength Option */}
+          {hasSelectedOrTypedDrug && (
+            <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-[#EAF4FB] dark:bg-[#092032] text-xs">
+              <div className="min-w-0 flex-1 flex items-center gap-1.5 truncate text-[#0D2B45] dark:text-[#EBF4FA]">
+                {liquidInfo.mgPerMl && (
+                  <Droplets
+                    className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#22E3D0] shrink-0"
+                    aria-hidden="true"
+                  />
+                )}
+                <span className="font-semibold truncate">{genericName || searchInput.trim()}</span>
+                {strength.trim() && (
+                  <>
+                    <span aria-hidden="true" className="text-[#0D2B45]/35 dark:text-[#EBF4FA]/35">·</span>
+                    <span className="font-mono font-semibold text-[#0E7C7B] dark:text-[#22E3D0] shrink-0">
+                      {strength.trim()}
+                    </span>
+                  </>
+                )}
+                {dosageForm.trim() && (
+                  <>
+                    <span aria-hidden="true" className="text-[#0D2B45]/35 dark:text-[#EBF4FA]/35">·</span>
+                    <span className="text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 truncate">
+                      {dosageForm.trim()}
+                    </span>
+                  </>
+                )}
+              </div>
 
-            <div>
-              <label
-                htmlFor="dose-strength-field"
-                className="block text-[11px] font-semibold uppercase tracking-wider text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 mb-1"
+              <button
+                type="button"
+                onClick={() => setIsEditingStrength((prev) => !prev)}
+                className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#0E7C7B] dark:text-[#22E3D0] hover:underline whitespace-nowrap shrink-0 cursor-pointer"
               >
-                Strength (for exact mL)
-              </label>
+                <Pencil className="w-3 h-3" />
+                <span>{isEditingStrength ? 'Done' : strength.trim() ? 'Edit Strength' : 'Add Strength'}</span>
+              </button>
+            </div>
+          )}
+
+          {/* Optional Inline Strength / Dosage Form Editor (only when user taps Edit Strength) */}
+          {isEditingStrength && (
+            <div className="grid grid-cols-2 gap-2 pt-0.5">
               <input
                 id="dose-strength-field"
                 type="text"
                 value={strength}
                 onChange={(e) => setStrength(e.target.value)}
-                placeholder="e.g., 100mg/5ml or 500mg"
-                className="w-full min-h-[44px] md:h-10 px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-base md:text-sm font-mono text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+                placeholder="Strength (e.g. 100mg/5ml)"
+                aria-label="Edit strength"
+                className="w-full min-h-[40px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-xs font-mono text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
               />
-            </div>
-
-            <div>
-              <label
-                htmlFor="dose-form-field"
-                className="block text-[11px] font-semibold uppercase tracking-wider text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 mb-1"
-              >
-                Dosage Form
-              </label>
               <select
                 id="dose-form-field"
+                aria-label="Edit dosage form"
                 value={
                   DOSAGE_FORM_OPTIONS.includes(dosageForm as (typeof DOSAGE_FORM_OPTIONS)[number])
                     ? dosageForm
@@ -683,9 +690,9 @@ export const DoseCalculatorView: React.FC = () => {
                     setDosageForm(e.target.value);
                   }
                 }}
-                className="w-full min-h-[44px] md:h-10 px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-base md:text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B] cursor-pointer"
+                className="w-full min-h-[40px] px-2.5 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-xs text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B] cursor-pointer"
               >
-                <option value="">Auto / Any Form</option>
+                <option value="">Any Form</option>
                 {dosageForm &&
                   !DOSAGE_FORM_OPTIONS.includes(
                     dosageForm as (typeof DOSAGE_FORM_OPTIONS)[number]
@@ -697,315 +704,233 @@ export const DoseCalculatorView: React.FC = () => {
                 ))}
               </select>
             </div>
-          </div>
+          )}
+        </div>
 
-          {/* Live Liquid Concentration Detection Pill */}
-          {liquidInfo.mgPerMl && (
-            <div className="inline-flex flex-wrap items-center gap-1.5 text-xs text-[#095C5B] dark:text-[#8EEAE8] bg-[#EBF4FA] dark:bg-[#0E7C7B]/20 border border-[#0E7C7B]/20 rounded-xl px-3 py-1.5">
-              <Droplets className="w-3.5 h-3.5 shrink-0" />
-              <span>
-                Liquid concentration detected:{' '}
-                <strong className="font-mono">{liquidInfo.unitLabel}</strong> (
-                <span className="font-mono">{Math.round(liquidInfo.mgPerMl * 100) / 100} mg/mL</span>) — exact{' '}
-                <strong>mL per dose</strong> will be calculated automatically.
+        {/* 2. Sleek Pediatric | Adult | Both Segmented Toggle */}
+        <div
+          role="tablist"
+          aria-label="Patient type"
+          className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10"
+        >
+          {(
+            [
+              { id: 'pediatric' as DosePatientMode, label: 'Pediatric', Icon: Baby },
+              { id: 'adult' as DosePatientMode, label: 'Adult', Icon: User },
+              { id: 'both' as DosePatientMode, label: 'Both', Icon: Users },
+            ] as const
+          ).map(({ id, label, Icon }) => {
+            const isActive = patientMode === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => {
+                  setPatientMode(id);
+                  setFormValidationError(null);
+                }}
+                className={`min-h-[40px] px-2.5 py-1.5 rounded-lg text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer ${
+                  isActive
+                    ? 'bg-[#0D2B45] dark:bg-[#0E7C7B] text-white'
+                    : 'text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 hover:text-[#0D2B45] dark:hover:text-white'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5 shrink-0" />
+                <span>{label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* 3. Compact Single-Row Weight (kg) + Age + Yrs/Mos (No Quick kg buttons) */}
+        {showPediatricInputs && (
+          <div className="space-y-1">
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <label
+                htmlFor="dose-weight-kg"
+                className="font-semibold text-[#0D2B45] dark:text-white"
+              >
+                Weight (kg) &amp; Age {patientMode === 'pediatric' && <span className="text-rose-500">*</span>}
+              </label>
+              <span className="text-[11px] text-[#0D2B45]/55 dark:text-[#EBF4FA]/55">
+                Exact mg &amp; mL
               </span>
             </div>
-          )}
-        </div>
 
-        {/* 2. Patient Type Toggle */}
-        <div className="space-y-2">
-          <span className="block text-xs sm:text-sm font-semibold text-[#0D2B45] dark:text-white">
-            Patient Type (রোগীর ধরন)
-          </span>
-          <div
-            role="tablist"
-            aria-label="Patient type"
-            className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 max-w-xl"
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={patientMode === 'pediatric'}
-              onClick={() => {
-                setPatientMode('pediatric');
-                setFormValidationError(null);
-              }}
-              className={`min-h-[42px] px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
-                patientMode === 'pediatric'
-                  ? 'bg-[#0D2B45] dark:bg-[#0E7C7B] text-white'
-                  : 'text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 hover:text-[#0D2B45] dark:hover:text-white'
-              }`}
-            >
-              <Baby className="w-4 h-4 shrink-0" />
-              <span>Pediatric (শিশু)</span>
-            </button>
-
-            <button
-              type="button"
-              role="tab"
-              aria-selected={patientMode === 'adult'}
-              onClick={() => {
-                setPatientMode('adult');
-                setFormValidationError(null);
-              }}
-              className={`min-h-[42px] px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
-                patientMode === 'adult'
-                  ? 'bg-[#0D2B45] dark:bg-[#0E7C7B] text-white'
-                  : 'text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 hover:text-[#0D2B45] dark:hover:text-white'
-              }`}
-            >
-              <User className="w-4 h-4 shrink-0" />
-              <span>Adult (বড়দের)</span>
-            </button>
-
-            <button
-              type="button"
-              role="tab"
-              aria-selected={patientMode === 'both'}
-              onClick={() => {
-                setPatientMode('both');
-                setFormValidationError(null);
-              }}
-              className={`min-h-[42px] px-3 py-2 rounded-lg text-xs sm:text-sm font-semibold inline-flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
-                patientMode === 'both'
-                  ? 'bg-[#0D2B45] dark:bg-[#0E7C7B] text-white'
-                  : 'text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 hover:text-[#0D2B45] dark:hover:text-white'
-              }`}
-            >
-              <Users className="w-4 h-4 shrink-0" />
-              <span>Both (উভয়)</span>
-            </button>
-          </div>
-        </div>
-
-        {/* 3. Contextual Inputs Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {showPediatricInputs && (
-            <div className="rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-3.5 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <label
-                  htmlFor="dose-weight-kg"
-                  className="text-xs font-bold text-[#0D2B45] dark:text-white flex items-center gap-1.5"
-                >
-                  <Baby className="w-3.5 h-3.5 text-[#0E7C7B] dark:text-[#149A99]" />
-                  <span>Body Weight (kg) · শিশুর ওজন</span>
-                  {patientMode === 'pediatric' && <span className="text-rose-500">*</span>}
-                </label>
-                <span className="text-[11px] text-[#0D2B45]/55 dark:text-[#EBF4FA]/55">
-                  For exact mg &amp; mL
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1 min-w-0">
+                <input
+                  id="dose-weight-kg"
+                  type="number"
+                  inputMode="decimal"
+                  step="0.1"
+                  min="0.5"
+                  max="150"
+                  value={weightInput}
+                  onChange={(e) => {
+                    setWeightInput(e.target.value);
+                    setFormValidationError(null);
+                  }}
+                  placeholder="Weight (e.g. 12)"
+                  className="w-full min-h-[44px] pl-3 pr-9 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-sm font-mono font-semibold text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-mono font-semibold text-[#0D2B45]/50 dark:text-[#EBF4FA]/50 pointer-events-none">
+                  kg
                 </span>
               </div>
 
-              <div className="grid grid-cols-2 gap-2.5">
-                <div className="relative">
-                  <input
-                    id="dose-weight-kg"
-                    type="number"
-                    inputMode="decimal"
-                    step="0.1"
-                    min="0.5"
-                    max="150"
-                    value={weightInput}
-                    onChange={(e) => {
-                      setWeightInput(e.target.value);
-                      setFormValidationError(null);
-                    }}
-                    placeholder="e.g., 12"
-                    className="w-full min-h-[44px] pl-3 pr-10 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-sm font-mono font-semibold text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
-                  />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-mono font-semibold text-[#0D2B45]/50 dark:text-[#EBF4FA]/50">
-                    kg
-                  </span>
-                </div>
+              <input
+                id="dose-age-val"
+                type="number"
+                inputMode="numeric"
+                min="0"
+                max="18"
+                value={ageValue}
+                onChange={(e) => setAgeValue(e.target.value)}
+                placeholder="Age"
+                aria-label="Age"
+                className="w-[74px] sm:w-24 shrink-0 min-h-[44px] px-2.5 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-sm font-mono text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+              />
 
-                <div className="flex items-center gap-1">
-                  <input
-                    id="dose-age-val"
-                    type="number"
-                    inputMode="numeric"
-                    min="0"
-                    max="18"
-                    value={ageValue}
-                    onChange={(e) => setAgeValue(e.target.value)}
-                    placeholder="Age (opt)"
-                    aria-label="Pediatric age"
-                    className="w-full min-h-[44px] px-2.5 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-sm font-mono text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
-                  />
-                  <select
-                    value={ageUnit}
-                    onChange={(e) => setAgeUnit(e.target.value as 'years' | 'months')}
-                    aria-label="Age unit"
-                    className="min-h-[44px] px-2 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-xs font-semibold text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B] cursor-pointer"
-                  >
-                    <option value="years">Yrs</option>
-                    <option value="months">Mos</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Quick weight chips */}
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="text-[11px] text-[#0D2B45]/55 dark:text-[#EBF4FA]/55 mr-0.5">
-                  Quick kg:
-                </span>
-                {QUICK_WEIGHTS_KG.map((w) => {
-                  const isActive = parsedWeightKg === w;
-                  return (
-                    <button
-                      key={`w-${w}`}
-                      type="button"
-                      onClick={() => {
-                        setWeightInput(String(w));
-                        setFormValidationError(null);
-                      }}
-                      className={`min-h-[38px] sm:min-h-[30px] px-2.5 py-1 rounded-lg text-xs sm:text-[11px] font-mono font-semibold transition-colors cursor-pointer ${
-                        isActive
-                          ? 'bg-[#0E7C7B] text-white'
-                          : 'bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 hover:border-[#0E7C7B]'
-                      }`}
-                    >
-                      {w} kg
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Indication & Renal/Elderly Caution Box */}
-          <div
-            className={`rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-3.5 space-y-3 ${
-              !showPediatricInputs ? 'md:col-span-2' : ''
-            }`}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <label
-                htmlFor="dose-indication-input"
-                className="text-xs font-bold text-[#0D2B45] dark:text-white"
-              >
-                Clinical Indication (Optional · রোগ / ইন্ডিকেশন)
-              </label>
-              {indication && (
-                <button
-                  type="button"
-                  onClick={() => setIndication('')}
-                  className="text-[11px] font-semibold text-[#0E7C7B] dark:text-[#149A99] hover:underline cursor-pointer"
+              <div className="relative shrink-0">
+                <select
+                  value={ageUnit}
+                  onChange={(e) => setAgeUnit(e.target.value as 'years' | 'months')}
+                  aria-label="Age unit"
+                  className="w-[72px] sm:w-24 min-h-[44px] appearance-none pl-2.5 pr-7 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-xs font-semibold text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B] cursor-pointer"
                 >
-                  Clear
-                </button>
-              )}
-            </div>
-
-            <input
-              id="dose-indication-input"
-              type="text"
-              value={indication}
-              onChange={(e) => setIndication(e.target.value)}
-              placeholder="e.g., URTI, UTI, Typhoid, CAP, Otitis Media..."
-              className="w-full min-h-[44px] px-3 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
-            />
-
-            {/* Quick Indication Chips */}
-            <div className="flex flex-wrap gap-1.5">
-              {indicationQuickChips.map((chip) => {
-                const isSelected = indication.trim().toLowerCase() === chip.toLowerCase();
-                return (
-                  <button
-                    key={`ind-chip-${chip}`}
-                    type="button"
-                    onClick={() => setIndication(isSelected ? '' : chip)}
-                    className={`min-h-[38px] sm:min-h-[30px] px-3 py-1 rounded-lg text-xs sm:text-[11px] font-semibold transition-colors cursor-pointer ${
-                      isSelected
-                        ? 'bg-[#0D2B45] dark:bg-[#0E7C7B] text-white'
-                        : 'bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-[#0D2B45]/75 dark:text-[#EBF4FA]/75 hover:border-[#0E7C7B]'
-                    }`}
-                  >
-                    {chip}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Renal / Elderly Caution Toggle */}
-            {showAdultInputs && (
-              <div className="pt-1 flex items-center justify-between gap-3 border-t border-[#0D2B45]/8 dark:border-[#EBF4FA]/8">
-                <div className="min-w-0">
-                  <div className="text-xs font-semibold text-[#0D2B45] dark:text-white">
-                    Renal / Elderly Caution
-                  </div>
-                  <div className="text-[11px] text-[#0D2B45]/55 dark:text-[#EBF4FA]/55">
-                    Highlight renal impairment &amp; geriatric dosing adjustments
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={renalElderlyCaution}
-                  onClick={() => setRenalElderlyCaution((prev) => !prev)}
-                  className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
-                    renalElderlyCaution
-                      ? 'bg-[#0E7C7B]'
-                      : 'bg-[#0D2B45]/20 dark:bg-[#EBF4FA]/20'
-                  }`}
-                >
-                  <span
-                    className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${
-                      renalElderlyCaution ? 'translate-x-6' : 'translate-x-1'
-                    }`}
-                  />
-                </button>
+                  <option value="years">Yrs</option>
+                  <option value="months">Mos</option>
+                </select>
+                <ChevronDown
+                  aria-hidden="true"
+                  className="w-3.5 h-3.5 text-[#0D2B45]/50 dark:text-[#EBF4FA]/50 pointer-events-none absolute right-2 top-1/2 -translate-y-1/2"
+                />
               </div>
-            )}
-          </div>
-        </div>
-
-        {/* Inline Form Validation Message */}
-        {formValidationError && (
-          <div className="rounded-xl bg-amber-50 dark:bg-amber-950/35 border border-amber-300 dark:border-amber-700/60 px-3.5 py-2.5 text-xs font-medium text-amber-950 dark:text-amber-200 flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
-            <span>{formValidationError}</span>
+            </div>
           </div>
         )}
 
-        {/* Action Buttons */}
-        <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
-          <div className="flex flex-wrap items-center gap-2.5">
-            <button
-              type="submit"
-              disabled={isCalculating}
-              className="min-h-[46px] px-5 py-2.5 rounded-xl bg-[#0D2B45] hover:bg-[#133859] dark:bg-[#0E7C7B] dark:hover:bg-[#149A99] disabled:opacity-55 text-white text-sm font-semibold inline-flex items-center gap-2 transition-colors active:scale-[0.98] cursor-pointer"
+        {/* 4. Compact Clinical Indication (Optional) — Single Input + Compact Dropdown */}
+        <div className="space-y-1">
+          <div className="flex items-center justify-between gap-2 text-xs">
+            <label
+              htmlFor="dose-indication-input"
+              className="font-semibold text-[#0D2B45] dark:text-white"
             >
-              {isCalculating ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>Calculating Dose...</span>
-                </>
-              ) : (
-                <>
-                  <Calculator className="w-4 h-4" />
-                  <span>Calculate Dose</span>
-                </>
-              )}
-            </button>
-
-            {(searchInput || genericName || result) && (
+              Clinical Indication <span className="font-normal text-[#0D2B45]/55 dark:text-[#EBF4FA]/55">(Optional)</span>
+            </label>
+            {indication && (
               <button
                 type="button"
-                onClick={handleClearAll}
-                className="min-h-[46px] px-4 py-2.5 rounded-xl bg-[#F4F8FC] hover:bg-[#EBF4FA] dark:bg-[#071522] dark:hover:bg-[#133859] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-xs sm:text-sm font-semibold text-[#0D2B45]/80 dark:text-[#EBF4FA]/85 transition-colors cursor-pointer"
+                onClick={() => setIndication('')}
+                className="text-[11px] font-semibold text-[#0E7C7B] dark:text-[#22E3D0] hover:underline cursor-pointer"
               >
                 Clear
               </button>
             )}
           </div>
 
-          <span className="text-[11px] text-[#0D2B45]/55 dark:text-[#EBF4FA]/55">
-            Cached locally for instant field recall · Exact frontend mL arithmetic
-          </span>
+          <div className="flex items-center gap-2">
+            <input
+              id="dose-indication-input"
+              type="text"
+              value={indication}
+              onChange={(e) => setIndication(e.target.value)}
+              placeholder="e.g., URTI, UTI, Typhoid, CAP"
+              className="flex-1 min-w-0 min-h-[44px] px-3 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-sm text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B]"
+            />
+
+            <div className="relative shrink-0 w-[112px] sm:w-44">
+              <select
+                aria-label="Quick select clinical indication"
+                value={
+                  indicationQuickChips.some(
+                    (c) => c.toLowerCase() === indication.trim().toLowerCase()
+                  )
+                    ? indicationQuickChips.find(
+                        (c) => c.toLowerCase() === indication.trim().toLowerCase()
+                      ) || ''
+                    : ''
+                }
+                onChange={(e) => {
+                  if (e.target.value) setIndication(e.target.value);
+                }}
+                className="w-full min-h-[44px] appearance-none pl-2.5 pr-7 rounded-xl bg-[#F4F8FC] dark:bg-[#071522] border border-[#0D2B45]/15 dark:border-[#EBF4FA]/15 text-base md:text-xs font-semibold text-[#0D2B45] dark:text-white focus:outline-none focus:border-[#0E7C7B] truncate cursor-pointer"
+              >
+                <option value="">Quick pick</option>
+                {indicationQuickChips.map((chip) => (
+                  <option key={`ind-opt-${chip}`} value={chip}>
+                    {chip}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown
+                aria-hidden="true"
+                className="w-3.5 h-3.5 text-[#0D2B45]/50 dark:text-[#EBF4FA]/50 pointer-events-none absolute right-2 top-1/2 -translate-y-1/2"
+              />
+            </div>
+          </div>
         </div>
+
+        {/* 5. Compact Renal / Elderly Caution Toggle */}
+        {showAdultInputs && (
+          <div className="flex items-center justify-between gap-3 py-1">
+            <span className="text-xs font-semibold text-[#0D2B45] dark:text-white">
+              Renal / Elderly Caution
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={renalElderlyCaution}
+              aria-label="Renal or elderly dosing caution"
+              onClick={() => setRenalElderlyCaution((prev) => !prev)}
+              className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                renalElderlyCaution
+                  ? 'bg-[#0E7C7B]'
+                  : 'bg-[#0D2B45]/20 dark:bg-[#EBF4FA]/20'
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  renalElderlyCaution ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+        )}
+
+        {/* Inline Form Validation Message */}
+        {formValidationError && (
+          <div className="rounded-xl bg-amber-50 dark:bg-amber-950/35 border border-amber-300 dark:border-amber-700/60 px-3 py-2 text-xs font-medium text-amber-950 dark:text-amber-200 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span>{formValidationError}</span>
+          </div>
+        )}
+
+        {/* Primary Calculate Dose Button */}
+        <button
+          type="submit"
+          disabled={isCalculating}
+          className="w-full min-h-[48px] px-5 py-2.5 rounded-xl bg-[#0D2B45] hover:bg-[#133859] dark:bg-[#0E7C7B] dark:hover:bg-[#149A99] disabled:opacity-55 text-white text-sm font-bold inline-flex items-center justify-center gap-2 transition-colors active:scale-[0.98] cursor-pointer"
+        >
+          {isCalculating ? (
+            <>
+              <RefreshCw className="w-4 h-4 animate-spin" />
+              <span>Calculating Dose...</span>
+            </>
+          ) : (
+            <>
+              <Calculator className="w-4 h-4" />
+              <span>Calculate Dose</span>
+            </>
+          )}
+        </button>
       </form>
 
+      <div ref={resultsRef} className="scroll-mt-16 space-y-4">
       {/* Loading Skeleton (5 structured cards) */}
       {isCalculating && (
         <div className="space-y-4" aria-busy="true" aria-live="polite">
@@ -1154,8 +1079,8 @@ export const DoseCalculatorView: React.FC = () => {
             <section
               className={`rounded-2xl bg-white dark:bg-[#0D2235] border p-5 space-y-3.5 ${
                 patientMode === 'pediatric'
-                  ? 'border-[#0E7C7B] border-l-4 border-l-[#0E7C7B]'
-                  : 'border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 border-l-4 border-l-[#0E7C7B]'
+                  ? 'border-[#0E7C7B]'
+                  : 'border-[#0D2B45]/10 dark:border-[#EBF4FA]/10'
               }`}
             >
               <div className="flex items-center justify-between gap-2">
@@ -1308,7 +1233,7 @@ export const DoseCalculatorView: React.FC = () => {
             <section
               className={`rounded-2xl bg-white dark:bg-[#0D2235] border p-5 space-y-3.5 ${
                 patientMode === 'adult'
-                  ? 'border-[#0D2B45] dark:border-[#0E7C7B] border-l-4 border-l-[#0D2B45] dark:border-l-[#149A99]'
+                  ? 'border-[#0D2B45] dark:border-[#0E7C7B]'
                   : 'border-[#0D2B45]/10 dark:border-[#EBF4FA]/10'
               }`}
             >
@@ -1648,6 +1573,7 @@ export const DoseCalculatorView: React.FC = () => {
           </section>
         </div>
       )}
+      </div>
     </div>
   );
 };

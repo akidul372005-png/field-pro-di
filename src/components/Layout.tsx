@@ -79,6 +79,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   };
 
   const isHomeDashboard = activeTab === 'dashboard';
+  const isDoseCalculator = activeTab === 'dose-calculator';
 
   return (
     <div
@@ -88,10 +89,10 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
           : 'bg-[#F4F8FC] dark:bg-[#071522]'
       } text-[#0D2B45] dark:text-[#EBF4FA] transition-colors`}
     >
-      {/* Top Bar: Deep-navy-to-teal gradient header (hidden on mobile Home where the Curved Wave Header sits seamlessly at top) */}
+      {/* Top Bar: Deep-navy-to-teal gradient header (hidden on mobile Home and full-screen Dose Calculator) */}
       <header
         className={`${
-          isHomeDashboard ? 'hidden md:block' : 'block'
+          isHomeDashboard || isDoseCalculator ? 'hidden md:block' : 'block'
         } sticky top-0 z-30 h-[52px] md:h-16 bg-gradient-to-r from-[#071D33] via-[#0D2B45] to-[#0E7C7B] text-white border-b border-white/10 shadow-sm pt-safe`}
       >
         <div className="max-w-7xl mx-auto h-full px-3.5 sm:px-6 flex items-center justify-between gap-2.5 md:gap-6">
@@ -272,21 +273,25 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         </div>
       </header>
 
-      {/* Main Content Viewport (full-bleed curved wave header on mobile Home, generous spacing elsewhere) */}
+      {/* Main Content Viewport */}
       <main
         className={`flex-1 w-full ${
           isHomeDashboard
             ? 'md:max-w-7xl md:mx-auto px-0 md:px-6 pt-0 pb-[66px] md:pt-5 md:pb-10'
+            : isDoseCalculator
+            ? 'max-w-5xl mx-auto px-3.5 sm:px-6 pt-0 md:pt-4 pb-6 pb-safe md:pb-10'
             : 'max-w-7xl mx-auto px-3.5 sm:px-6 pt-3 sm:pt-5 pb-12 md:pb-10'
         }`}
       >
         {children}
       </main>
 
-      {/* Minimal Global Brand Footer (hidden on mobile Home since Home includes the MedMentor BD bar + Stethoscope footer) */}
-      <div className={isHomeDashboard ? 'hidden md:block' : 'pb-20 md:pb-0'}>
-        <MedMentorFooter />
-      </div>
+      {/* Minimal Global Brand Footer (hidden on mobile Home and full-screen Dose Calculator) */}
+      {!isDoseCalculator && (
+        <div className={isHomeDashboard ? 'hidden md:block' : 'pb-20 md:pb-0'}>
+          <MedMentorFooter />
+        </div>
+      )}
 
       {/* Global Product Brief, Add/Edit & Delete Modals */}
       <ProductBriefModal />
@@ -302,7 +307,9 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
       {toasts.length > 0 && (
         <div
           aria-live="polite"
-          className="fixed z-50 bottom-20 md:bottom-6 right-3.5 left-3.5 sm:left-auto sm:w-96 flex flex-col gap-2 pointer-events-none"
+          className={`fixed z-50 ${
+            isDoseCalculator ? 'bottom-4 md:bottom-6' : 'bottom-20 md:bottom-6'
+          } right-3.5 left-3.5 sm:left-auto sm:w-96 flex flex-col gap-2 pointer-events-none`}
         >
           {toasts.map((toast) => {
             const toneStyles =
@@ -347,61 +354,63 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         </div>
       )}
 
-      {/* Fixed 5-Tab Mobile Bottom Navigation Bar — Solid White Surface with Active Emerald Indicator */}
-      <nav
-        aria-label="Mobile bottom navigation"
-        className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white dark:bg-[#0B1C2D] border-t border-slate-200/90 dark:border-slate-800 pb-safe shadow-[0_-4px_18px_rgba(7,21,34,0.09)]"
-      >
-        <div className="grid grid-cols-5 h-[62px] items-center px-1.5">
-          {MOBILE_BOTTOM_TABS.map((tab) => {
-            const Icon = tab.id === 'team' && !currentUser && !teamSession ? Lock : tab.icon;
-            const isActive = tab.matchTabs
-              ? tab.matchTabs.includes(activeTab)
-              : activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => {
-                  if (tab.id === 'dashboard') {
-                    navigateHome();
-                  } else {
-                    setActiveTab(tab.id);
-                    window.scrollTo({ top: 0, behavior: 'auto' });
-                  }
-                }}
-                aria-current={isActive ? 'page' : undefined}
-                className={`relative min-h-[48px] flex flex-col items-center justify-center gap-1 rounded-xl transition-colors active:scale-[0.95] ${
-                  isActive
-                    ? 'text-[#0E9F7F] dark:text-[#22E3D0] font-bold'
-                    : 'text-[#4B5E73] dark:text-slate-400 hover:text-[#0D2B45] dark:hover:text-white font-medium'
-                }`}
-              >
-                <span className="relative inline-flex items-center justify-center">
-                  <Icon className="w-[21px] h-[21px]" />
-                  {tab.id === 'team' && pendingInvites.length > 0 && (
+      {/* Fixed 5-Tab Mobile Bottom Navigation Bar — Hidden inside full-screen Dose Calculator */}
+      {!isDoseCalculator && (
+        <nav
+          aria-label="Mobile bottom navigation"
+          className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white dark:bg-[#0B1C2D] border-t border-slate-200/90 dark:border-slate-800 pb-safe shadow-[0_-4px_18px_rgba(7,21,34,0.09)]"
+        >
+          <div className="grid grid-cols-5 h-[62px] items-center px-1.5">
+            {MOBILE_BOTTOM_TABS.map((tab) => {
+              const Icon = tab.id === 'team' && !currentUser && !teamSession ? Lock : tab.icon;
+              const isActive = tab.matchTabs
+                ? tab.matchTabs.includes(activeTab)
+                : activeTab === tab.id;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => {
+                    if (tab.id === 'dashboard') {
+                      navigateHome();
+                    } else {
+                      setActiveTab(tab.id);
+                      window.scrollTo({ top: 0, behavior: 'auto' });
+                    }
+                  }}
+                  aria-current={isActive ? 'page' : undefined}
+                  className={`relative min-h-[48px] flex flex-col items-center justify-center gap-1 rounded-xl transition-colors active:scale-[0.95] ${
+                    isActive
+                      ? 'text-[#0E9F7F] dark:text-[#22E3D0] font-bold'
+                      : 'text-[#4B5E73] dark:text-slate-400 hover:text-[#0D2B45] dark:hover:text-white font-medium'
+                  }`}
+                >
+                  <span className="relative inline-flex items-center justify-center">
+                    <Icon className="w-[21px] h-[21px]" />
+                    {tab.id === 'team' && pendingInvites.length > 0 && (
+                      <span
+                        aria-label={`${pendingInvites.length} pending team invites`}
+                        className="absolute -top-1.5 -right-2.5 min-w-[16px] h-[16px] px-1 rounded-full bg-rose-600 text-white text-[9.5px] font-bold inline-flex items-center justify-center leading-none shadow-sm"
+                      >
+                        {pendingInvites.length}
+                      </span>
+                    )}
+                  </span>
+                  <span className="text-[11px] leading-none tracking-tight whitespace-nowrap">
+                    {tab.label}
+                  </span>
+                  {isActive && (
                     <span
-                      aria-label={`${pendingInvites.length} pending team invites`}
-                      className="absolute -top-1.5 -right-2.5 min-w-[16px] h-[16px] px-1 rounded-full bg-rose-600 text-white text-[9.5px] font-bold inline-flex items-center justify-center leading-none shadow-sm"
-                    >
-                      {pendingInvites.length}
-                    </span>
+                      aria-hidden="true"
+                      className="absolute -bottom-0.5 w-8 h-[3px] rounded-full bg-gradient-to-r from-[#10B981] to-[#14B8A6]"
+                    />
                   )}
-                </span>
-                <span className="text-[11px] leading-none tracking-tight whitespace-nowrap">
-                  {tab.label}
-                </span>
-                {isActive && (
-                  <span
-                    aria-hidden="true"
-                    className="absolute -bottom-0.5 w-8 h-[3px] rounded-full bg-gradient-to-r from-[#10B981] to-[#14B8A6]"
-                  />
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </nav>
+                </button>
+              );
+            })}
+          </div>
+        </nav>
+      )}
     </div>
   );
 };
