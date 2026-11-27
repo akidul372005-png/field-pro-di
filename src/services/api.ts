@@ -2254,27 +2254,107 @@ export function calculateBoxPrice(
 }
 
 const SPECIALIST_ALIASES: Record<string, string[]> = {
-  'internal medicine': ['medicine', 'general medicine', 'medicine / internal medicine', 'internal medicine / medicine'],
-  pediatrics: ['paediatrics', 'child', 'pediatric', 'paediatric'],
-  'endocrinology & diabetology': ['endocrinology', 'diabetology', 'diabetes', 'endocrinology / diabetology'],
-  'pulmonology / chest': ['pulmonology', 'chest', 'respiratory', 'chest diseases', 'respiratory medicine'],
-  'gynecology & obstetrics': ['gynecology', 'gynaecology', 'obstetrics', 'obgyn', 'gynae', 'obs & gynae'],
-  'general surgery': ['surgery', 'surgeon'],
+  'internal medicine': [
+    'medicine',
+    'general medicine',
+    'medicine / internal medicine',
+    'internal medicine / medicine',
+    'medicine specialist',
+  ],
+  pediatrics: [
+    'paediatrics',
+    'child',
+    'pediatric',
+    'paediatric',
+    'pediatrics & neonatology',
+    'paediatrics & neonatology',
+    'neonatology',
+    'child specialist',
+    'pediatrician',
+  ],
+  cardiology: ['cardiology & medicine', 'heart', 'cardiovascular', 'cardiologist'],
+  neurology: ['neuromedicine', 'neuro medicine', 'neurology / neuromedicine', 'neurologist'],
+  gastroenterology: ['gastro', 'hepatology', 'gastroenterology & hepatology', 'liver'],
+  'endocrinology & diabetology': [
+    'endocrinology',
+    'diabetology',
+    'diabetes',
+    'endocrinology / diabetology',
+    'hormone',
+  ],
+  'pulmonology / chest': [
+    'pulmonology',
+    'chest',
+    'respiratory',
+    'chest diseases',
+    'respiratory medicine',
+    'chest & asthma',
+  ],
+  nephrology: ['kidney', 'renal', 'nephrology & dialysis'],
+  'gynecology & obstetrics': [
+    'gynecology',
+    'gynaecology',
+    'obstetrics',
+    'obgyn',
+    'gynae',
+    'obs & gynae',
+    'gynae & obs',
+    'obstetrics & gynecology',
+    'gynecology & obs',
+    'obs/gynae',
+  ],
+  'general surgery': ['surgery', 'surgeon', 'general & laparoscopic surgery'],
   'general physician (gp)': ['gp', 'general physician', 'general practice'],
-  ent: ['ear nose throat', 'otolaryngology', 'ent & head neck'],
-  orthopedics: ['orthopaedics', 'ortho', 'orthopedic surgery'],
+  ent: ['ear nose throat', 'otolaryngology', 'ent & head neck', 'ent specialist'],
+  ophthalmology: ['eye', 'eye specialist', 'ophthalmologist'],
+  dermatology: [
+    'skin',
+    'skin & vd',
+    'dermatology & venereology',
+    'dermatology / skin',
+    'venereology',
+  ],
+  orthopedics: ['orthopaedics', 'ortho', 'orthopedic surgery', 'orthopaedic'],
+  urology: ['urology & andrology', 'urologist'],
+  psychiatry: ['mental health', 'psychiatry & mental health', 'psychiatrist'],
+  oncology: ['cancer', 'clinical oncology', 'medical oncology'],
+  rheumatology: ['arthritis', 'rheumatology & medicine'],
+  dental: ['dentistry', 'dental surgery', 'oral & dental', 'dentist'],
 };
 
-export function matchSpecialistName(a?: string, b?: string): boolean {
-  const normA = String(a ?? '').trim().toLowerCase();
-  const normB = String(b ?? '').trim().toLowerCase();
+function matchSpecialistAtom(normA: string, normB: string): boolean {
   if (!normA || !normB) return false;
   if (normA === normB) return true;
-
   for (const [canonical, aliases] of Object.entries(SPECIALIST_ALIASES)) {
     const group = [canonical, ...aliases];
     if (group.includes(normA) && group.includes(normB)) {
       return true;
+    }
+  }
+  return false;
+}
+
+export function matchSpecialistName(a?: string, b?: string): boolean {
+  const normA = String(a ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const normB = String(b ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!normA || !normB) return false;
+  if (matchSpecialistAtom(normA, normB)) return true;
+
+  // Handle compound specialties like "Pediatrics & Neonatology" vs "Pediatrics"
+  const partsA = normA
+    .split(/\s*(?:&|\/|,|\||and)\s*/i)
+    .map((p) => p.replace(/[()]/g, '').trim())
+    .filter((p) => p.length >= 2);
+  const partsB = normB
+    .split(/\s*(?:&|\/|,|\||and)\s*/i)
+    .map((p) => p.replace(/[()]/g, '').trim())
+    .filter((p) => p.length >= 2);
+
+  for (const pa of [normA, ...partsA]) {
+    for (const pb of [normB, ...partsB]) {
+      if (matchSpecialistAtom(pa, pb)) {
+        return true;
+      }
     }
   }
   return false;
@@ -2362,24 +2442,83 @@ export function getDoctorSchedule(
   return { days, hours, primaryChamber };
 }
 
+export type WeekdayCode = (typeof VISITING_DAYS_LIST)[number];
+
+export interface WeekdayInfo {
+  code: WeekdayCode;
+  fullEn: string;
+  labelBn: string;
+  shortBn: string;
+}
+
+const WEEKDAY_INFO_BY_JS_DAY: readonly WeekdayInfo[] = [
+  { code: 'Sun', fullEn: 'Sunday', labelBn: 'রবিবার', shortBn: 'রবি' },
+  { code: 'Mon', fullEn: 'Monday', labelBn: 'সোমবার', shortBn: 'সোম' },
+  { code: 'Tue', fullEn: 'Tuesday', labelBn: 'মঙ্গলবার', shortBn: 'মঙ্গল' },
+  { code: 'Wed', fullEn: 'Wednesday', labelBn: 'বুধবার', shortBn: 'বুধ' },
+  { code: 'Thu', fullEn: 'Thursday', labelBn: 'বৃহস্পতিবার', shortBn: 'বৃহঃ' },
+  { code: 'Fri', fullEn: 'Friday', labelBn: 'শুক্রবার', shortBn: 'শুক্র' },
+  { code: 'Sat', fullEn: 'Saturday', labelBn: 'শনিবার', shortBn: 'শনি' },
+] as const;
+
+export function getTodayWeekdayInfo(date: Date = new Date()): WeekdayInfo {
+  return WEEKDAY_INFO_BY_JS_DAY[date.getDay()] || WEEKDAY_INFO_BY_JS_DAY[0];
+}
+
+function normalizeBengaliDaysToEnglish(raw: string): string {
+  return raw
+    .replace(/শনিবার|শনি/g, ' Sat ')
+    .replace(/রবিবার|রবি/g, ' Sun ')
+    .replace(/সোমবার|সোম/g, ' Mon ')
+    .replace(/মঙ্গলবার|মঙ্গল/g, ' Tue ')
+    .replace(/বুধবার|বুধ/g, ' Wed ')
+    .replace(/বৃহস্পতিবার|বৃহস্পতি|বৃহঃবার|বৃহঃ|বৃহ\.?/g, ' Thu ')
+    .replace(/শুক্রবার|শুক্র/g, ' Fri ')
+    .replace(/থেকে|হতে/g, ' to ');
+}
+
 export function parseVisitingDaysToSelection(raw?: string): {
   selectedDays: string[];
   isDaily: boolean;
 } {
-  const text = String(raw ?? '').trim();
-  if (!text) return { selectedDays: [], isDaily: false };
-  if (/daily|every\s*day|all\s*days|প্রতিদিন/i.test(text)) {
-    return { selectedDays: [...VISITING_DAYS_LIST], isDaily: true };
-  }
+  const original = String(raw ?? '').trim();
+  if (!original) return { selectedDays: [], isDaily: false };
 
   const allDays: string[] = [...VISITING_DAYS_LIST];
+  const normalized = normalizeBengaliDaysToEnglish(original);
+
+  // Handle "Except Fri", "Fri off", "শুক্রবার বন্ধ" exclusion schedules
+  const closedDays = new Set<string>();
+  const exceptMatches = normalized.matchAll(
+    /(?:except|without|excluding|ছাড়া|ব্যতীত)\s+(sat|sun|mon|tue|wed|thu|fri)[a-z.]*/gi
+  );
+  for (const m of exceptMatches) {
+    const matched = allDays.find((d) => d.toLowerCase() === m[1].toLowerCase());
+    if (matched) closedDays.add(matched);
+  }
+  const offMatches = normalized.matchAll(
+    /\b(sat|sun|mon|tue|wed|thu|fri)[a-z.]*\s*(?:off|closed|বন্ধ)\b/gi
+  );
+  for (const m of offMatches) {
+    const matched = allDays.find((d) => d.toLowerCase() === m[1].toLowerCase());
+    if (matched) closedDays.add(matched);
+  }
+
+  const isDailyText = /daily|every\s*day|all\s*days|7\s*days|প্রতিদিন|সব\s*দিন|রোজ/i.test(original);
+  if (isDailyText && closedDays.size === 0) {
+    return { selectedDays: [...VISITING_DAYS_LIST], isDaily: true };
+  }
+  if ((isDailyText || closedDays.size > 0) && closedDays.size > 0 && !/[-–—~]|to/i.test(normalized)) {
+    const remaining = allDays.filter((d) => !closedDays.has(d));
+    return { selectedDays: remaining, isDaily: remaining.length === 7 };
+  }
+
   const found = new Set<string>();
 
-  // Handle range like "Sat – Thu" or "Sun - Thu"
-  const rangeMatch = text.match(
-    /\b(sat|sun|mon|tue|wed|thu|fri)[a-z]*\s*[-–—to]+\s*(sat|sun|mon|tue|wed|thu|fri)[a-z]*\b/i
-  );
-  if (rangeMatch) {
+  // Handle one or more ranges like "Sat - Thu", "Sun–Wed", "Sat to Thu", "শনি-বৃহঃ"
+  const rangeRegex =
+    /\b(sat|sun|mon|tue|wed|thu|fri)[a-z.]*\s*(?:[-–—~]|to)\s*(sat|sun|mon|tue|wed|thu|fri)[a-z.]*\b/gi;
+  for (const rangeMatch of normalized.matchAll(rangeRegex)) {
     const startIdx = allDays.findIndex((d) => d.toLowerCase() === rangeMatch[1].toLowerCase());
     const endIdx = allDays.findIndex((d) => d.toLowerCase() === rangeMatch[2].toLowerCase());
     if (startIdx >= 0 && endIdx >= 0) {
@@ -2392,18 +2531,65 @@ export function parseVisitingDaysToSelection(raw?: string): {
     }
   }
 
-  allDays.forEach((day) => {
-    const regex = new RegExp(`\\b${day}`, 'i');
-    if (regex.test(text)) {
-      found.add(day);
-    }
-  });
+  // Match individual English & normalized Bengali weekday names
+  const singleRegex =
+    /\b(sat(?:urday)?|sun(?:day)?|mon(?:day)?|tue(?:s|sday)?|wed(?:nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?)\b/gi;
+  for (const m of normalized.matchAll(singleRegex)) {
+    const prefix = m[1].slice(0, 3).toLowerCase();
+    const matched = allDays.find((d) => d.toLowerCase() === prefix);
+    if (matched) found.add(matched);
+  }
+
+  closedDays.forEach((d) => found.delete(d));
 
   const ordered = allDays.filter((d) => found.has(d));
   return {
     selectedDays: ordered,
     isDaily: ordered.length === 7,
   };
+}
+
+/**
+ * Checks whether a visiting-days string (e.g. "Daily", "Sat-Thu", "Fri", "শনি-বৃহঃ", "শুক্রবার")
+ * covers the given weekday code (defaults to today).
+ */
+export function doesScheduleMatchWeekday(
+  rawDays?: string,
+  weekdayCode: WeekdayCode = getTodayWeekdayInfo().code
+): boolean {
+  const { selectedDays, isDaily } = parseVisitingDaysToSelection(rawDays);
+  if (isDaily) return true;
+  return selectedDays.includes(weekdayCode);
+}
+
+/**
+ * Returns true if a doctor visits on the specified weekday across their Doctor record,
+ * Remarks schedule, or any linked Chamber schedule.
+ */
+export function isDoctorAvailableOnWeekday(
+  doc: Doctor,
+  chambers: Chamber[],
+  weekdayCode: WeekdayCode = getTodayWeekdayInfo().code
+): boolean {
+  const candidateSchedules: string[] = [];
+  if (doc.Visiting_Days) candidateSchedules.push(doc.Visiting_Days);
+  const fromRemarks = parseScheduleFromRemarks(doc.Remarks);
+  if (fromRemarks.days) candidateSchedules.push(fromRemarks.days);
+  for (const ch of chambers) {
+    if (ch.Doctor_ID === doc.Doctor_ID && ch.Visiting_Days) {
+      candidateSchedules.push(ch.Visiting_Days);
+    }
+  }
+  return candidateSchedules.some((days) => doesScheduleMatchWeekday(days, weekdayCode));
+}
+
+export function filterDoctorsAvailableToday(
+  doctors: Doctor[],
+  chambers: Chamber[],
+  date: Date = new Date()
+): Doctor[] {
+  const todayCode = getTodayWeekdayInfo(date).code;
+  return doctors.filter((doc) => isDoctorAvailableOnWeekday(doc, chambers, todayCode));
 }
 
 export function formatVisitingDays(selectedDays: string[], isDaily: boolean): string {

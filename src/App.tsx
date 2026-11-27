@@ -10,6 +10,7 @@ import { DoseCalculatorView } from './components/DoseCalculatorView';
 import { KnowledgeHubView } from './components/KnowledgeHubView';
 import { TeamWorkspaceView } from './components/TeamWorkspaceView';
 import { SpecialistsView } from './components/SpecialistsView';
+import { TodaysDoctorsView } from './components/TodaysDoctorsView';
 
 const ActiveScreen: React.FC = () => {
   const { activeTab } = useNavigation();
@@ -29,6 +30,8 @@ const ActiveScreen: React.FC = () => {
       return <KnowledgeHubView />;
     case 'team':
       return <TeamWorkspaceView />;
+    case 'todays-doctors':
+      return <TodaysDoctorsView />;
     case 'settings':
       return <SettingsView />;
     case 'dashboard':

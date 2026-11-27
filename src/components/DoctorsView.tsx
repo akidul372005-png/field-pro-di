@@ -494,7 +494,15 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        startDetailingFlow({ specialist: doc.Specialty, subTab: 'detailing' });
+                        startDetailingFlow({
+                          doctorId: doc.Doctor_ID,
+                          doctorName: doc.Doctor_Name,
+                          departmentId: doc.Department_ID,
+                          specialist: deptName || doc.Specialty,
+                          scopeToDoctorSpecialty: true,
+                          returnTab: 'team',
+                          subTab: 'detailing',
+                        });
                       }}
                       className="min-h-[34px] px-2.5 rounded-lg bg-[#EBF4FA] dark:bg-[#133859] font-semibold text-xs text-[#0E7C7B] dark:text-[#7CE0DF] hover:bg-[#dcecf7] dark:hover:bg-[#1B4A73] whitespace-nowrap shrink-0 inline-flex items-center justify-center cursor-pointer transition-colors"
                     >
@@ -637,9 +645,22 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    const spec = selectedDoctor.Specialty;
+                    const spec =
+                      departmentMap.get(selectedDoctor.Department_ID)?.Department_Name ||
+                      selectedDoctor.Specialty;
+                    const docId = selectedDoctor.Doctor_ID;
+                    const docName = selectedDoctor.Doctor_Name;
+                    const deptId = selectedDoctor.Department_ID;
                     setSelectedDoctorId(null);
-                    startDetailingFlow({ specialist: spec, subTab: 'detailing' });
+                    startDetailingFlow({
+                      doctorId: docId,
+                      doctorName: docName,
+                      departmentId: deptId,
+                      specialist: spec,
+                      scopeToDoctorSpecialty: true,
+                      returnTab: 'team',
+                      subTab: 'detailing',
+                    });
                   }}
                   className="min-h-[44px] px-4 py-2.5 rounded-xl bg-[#0E7C7B] hover:bg-[#095C5B] text-white text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors"
                 >
@@ -825,9 +846,22 @@ export const DoctorsView: React.FC<DoctorsViewProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      const spec = selectedDoctor.Specialty;
+                      const spec =
+                        departmentMap.get(selectedDoctor.Department_ID)?.Department_Name ||
+                        selectedDoctor.Specialty;
+                      const docId = selectedDoctor.Doctor_ID;
+                      const docName = selectedDoctor.Doctor_Name;
+                      const deptId = selectedDoctor.Department_ID;
                       setSelectedDoctorId(null);
-                      startDetailingFlow({ specialist: spec, subTab: 'detailing' });
+                      startDetailingFlow({
+                        doctorId: docId,
+                        doctorName: docName,
+                        departmentId: deptId,
+                        specialist: spec,
+                        scopeToDoctorSpecialty: true,
+                        returnTab: 'team',
+                        subTab: 'detailing',
+                      });
                     }}
                     className="text-xs font-semibold text-[#0E7C7B] dark:text-[#149A99] hover:underline whitespace-nowrap"
                   >

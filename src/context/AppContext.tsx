@@ -267,17 +267,25 @@ interface AppContextValue {
   openProductBrief: (productId: string) => void;
   prefillDetailing: {
     doctorId?: string;
+    doctorName?: string;
+    departmentId?: string;
     productId?: string;
     genericName?: string;
     specialist?: string;
+    scopeToDoctorSpecialty?: boolean;
+    returnTab?: NavTab;
     subTab?: 'catalog' | 'detailing';
   } | null;
   setPrefillDetailing: (
     val: {
       doctorId?: string;
+      doctorName?: string;
+      departmentId?: string;
       productId?: string;
       genericName?: string;
       specialist?: string;
+      scopeToDoctorSpecialty?: boolean;
+      returnTab?: NavTab;
       subTab?: 'catalog' | 'detailing';
     } | null
   ) => void;
@@ -308,9 +316,13 @@ interface AppContextValue {
   ) => void;
   startDetailingFlow: (opts: {
     doctorId?: string;
+    doctorName?: string;
+    departmentId?: string;
     productId?: string;
     genericName?: string;
     specialist?: string;
+    scopeToDoctorSpecialty?: boolean;
+    returnTab?: NavTab;
     subTab?: 'catalog' | 'detailing';
   }) => void;
 
@@ -455,9 +467,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   } | null>(null);
   const [prefillDetailing, setPrefillDetailing] = useState<{
     doctorId?: string;
+    doctorName?: string;
+    departmentId?: string;
     productId?: string;
     genericName?: string;
     specialist?: string;
+    scopeToDoctorSpecialty?: boolean;
+    returnTab?: NavTab;
     subTab?: 'catalog' | 'detailing';
   } | null>(null);
   const [doctorDirectoryHospitalFilter, setDoctorDirectoryHospitalFilter] = useState('');
@@ -2329,9 +2345,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const startDetailingFlow = useCallback(
     (opts: {
       doctorId?: string;
+      doctorName?: string;
+      departmentId?: string;
       productId?: string;
       genericName?: string;
       specialist?: string;
+      scopeToDoctorSpecialty?: boolean;
+      returnTab?: NavTab;
       subTab?: 'catalog' | 'detailing';
     }) => {
       startTransition(() => {

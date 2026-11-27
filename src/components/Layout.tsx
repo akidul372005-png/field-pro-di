@@ -80,6 +80,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
   const isHomeDashboard = activeTab === 'dashboard';
   const isDoseCalculator = activeTab === 'dose-calculator';
+  const isTodaysDoctors = activeTab === 'todays-doctors';
+  const isFullScreenMobile = isDoseCalculator || isTodaysDoctors;
 
   return (
     <div
@@ -89,10 +91,10 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
           : 'bg-[#F4F8FC] dark:bg-[#071522]'
       } text-[#0D2B45] dark:text-[#EBF4FA] transition-colors`}
     >
-      {/* Top Bar: Deep-navy-to-teal gradient header (hidden on mobile Home and full-screen Dose Calculator) */}
+      {/* Top Bar: Deep-navy-to-teal gradient header (hidden on mobile Home and full-screen views) */}
       <header
         className={`${
-          isHomeDashboard || isDoseCalculator ? 'hidden md:block' : 'block'
+          isHomeDashboard || isFullScreenMobile ? 'hidden md:block' : 'block'
         } sticky top-0 z-30 h-[52px] md:h-16 bg-gradient-to-r from-[#071D33] via-[#0D2B45] to-[#0E7C7B] text-white border-b border-white/10 shadow-sm pt-safe`}
       >
         <div className="max-w-7xl mx-auto h-full px-3.5 sm:px-6 flex items-center justify-between gap-2.5 md:gap-6">
@@ -278,6 +280,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         className={`flex-1 w-full ${
           isHomeDashboard
             ? 'md:max-w-7xl md:mx-auto px-0 md:px-6 pt-0 pb-[66px] md:pt-5 md:pb-10'
+            : isTodaysDoctors
+            ? 'w-full px-0 pt-0 pb-0'
             : isDoseCalculator
             ? 'max-w-5xl mx-auto px-3.5 sm:px-6 pt-0 md:pt-4 pb-6 pb-safe md:pb-10'
             : 'max-w-7xl mx-auto px-3.5 sm:px-6 pt-3 sm:pt-5 pb-12 md:pb-10'
@@ -286,8 +290,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         {children}
       </main>
 
-      {/* Minimal Global Brand Footer (hidden on mobile Home and full-screen Dose Calculator) */}
-      {!isDoseCalculator && (
+      {/* Minimal Global Brand Footer (hidden on mobile Home and full-screen views) */}
+      {!isFullScreenMobile && (
         <div className={isHomeDashboard ? 'hidden md:block' : 'pb-20 md:pb-0'}>
           <MedMentorFooter />
         </div>
@@ -308,7 +312,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         <div
           aria-live="polite"
           className={`fixed z-50 ${
-            isDoseCalculator ? 'bottom-4 md:bottom-6' : 'bottom-20 md:bottom-6'
+            isFullScreenMobile ? 'bottom-4 md:bottom-6' : 'bottom-20 md:bottom-6'
           } right-3.5 left-3.5 sm:left-auto sm:w-96 flex flex-col gap-2 pointer-events-none`}
         >
           {toasts.map((toast) => {
@@ -354,8 +358,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         </div>
       )}
 
-      {/* Fixed 5-Tab Mobile Bottom Navigation Bar — Hidden inside full-screen Dose Calculator */}
-      {!isDoseCalculator && (
+      {/* Fixed 5-Tab Mobile Bottom Navigation Bar — Hidden inside full-screen views */}
+      {!isFullScreenMobile && (
         <nav
           aria-label="Mobile bottom navigation"
           className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white dark:bg-[#0B1C2D] border-t border-slate-200/90 dark:border-slate-800 pb-safe shadow-[0_-4px_18px_rgba(7,21,34,0.09)]"

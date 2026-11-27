@@ -20,6 +20,7 @@ export type NavTab =
   | 'dose-calculator'
   | 'knowledge'
   | 'team'
+  | 'todays-doctors'
   | 'settings';
 
 export interface TeamSession {

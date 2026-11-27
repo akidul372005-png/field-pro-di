@@ -14,13 +14,34 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import {
+  extractBrandBase,
   GenericGroup,
   getValidVideoUrl,
   matchSpecialistName,
   normalizeGenericKey,
+  normalizeProductGroup,
+  parsePreferredGenerics,
+  productMatchesPreferredGeneric,
 } from '../services/api';
+import { NavTab, Product, PRODUCT_GROUP_CODES, ProductGroupCode } from '../types';
 import { WatchNowButton } from './WatchNowButton';
 import { useDebouncedValue, useWindowedList } from '../hooks/useWindowedList';
+
+interface DoctorDetailingScope {
+  doctorId?: string;
+  doctorName: string;
+  specialty: string;
+  departmentId?: string;
+  returnTab: NavTab;
+}
+
+interface SpecialtyScopedEntry {
+  group: GenericGroup;
+  groupCodes: ProductGroupCode[];
+  brandsByGroup: Map<ProductGroupCode, string[]>;
+  preferredScriptId: string | null;
+  hasSpecialtyScript: boolean;
+}
 
 type ReaderLang = 'bn' | 'en';
 
@@ -88,10 +109,13 @@ GenericListCard.displayName = 'GenericListCard';
 
 export const DetailingActivitiesView: React.FC = () => {
   const {
+    dataset,
+    departmentMap,
     isSuperAdmin,
     genericGroups,
     prefillDetailing,
     setPrefillDetailing,
+    setActiveTab,
     pushToast,
     openProductBrief,
     openAddModal,
@@ -104,6 +128,11 @@ export const DetailingActivitiesView: React.FC = () => {
   const [selectedScriptId, setSelectedScriptId] = useState<string | null>(null);
   const [readerLang, setReaderLang] = useState<ReaderLang>('bn');
   const [copied, setCopied] = useState(false);
+
+  // Doctor-Specific Specialty & Group-Wise Detailing Scope
+  const [doctorScope, setDoctorScope] = useState<DoctorDetailingScope | null>(null);
+  const [selectedProductGroup, setSelectedProductGroup] = useState<'ALL' | ProductGroupCode>('ALL');
+  const [scopeSearch, setScopeSearch] = useState('');
 
   const genericGroupByKey = useMemo(
     () => new Map(genericGroups.map((g) => [g.key, g])),
@@ -124,16 +153,30 @@ export const DetailingActivitiesView: React.FC = () => {
     return selectedGroup.scripts[0] || null;
   }, [selectedGroup, selectedScriptId]);
 
-  // Lock background page scroll & allow Escape to exit full-screen reader
+  const handleExitDoctorScope = useCallback(() => {
+    const targetTab = doctorScope?.returnTab || 'team';
+    setDoctorScope(null);
+    setSelectedProductGroup('ALL');
+    setScopeSearch('');
+    setSelectedGenericKey(null);
+    setSelectedScriptId(null);
+    setActiveTab(targetTab);
+  }, [doctorScope, setActiveTab]);
+
+  // Lock background page scroll & allow Escape to exit full-screen reader or doctor specialty view
   useEffect(() => {
-    if (!selectedGroup) return;
+    if (!selectedGroup && !doctorScope) return;
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        setSelectedGenericKey(null);
-        setSelectedScriptId(null);
+        if (selectedGroup) {
+          setSelectedGenericKey(null);
+          setSelectedScriptId(null);
+        } else if (doctorScope) {
+          handleExitDoctorScope();
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -142,7 +185,7 @@ export const DetailingActivitiesView: React.FC = () => {
       document.body.style.overflow = prevOverflow;
       window.removeEventListener('keydown', onKeyDown);
     };
-  }, [selectedGroup]);
+  }, [selectedGroup, doctorScope, handleExitDoctorScope]);
 
   // Reset copy state when script or language changes
   useEffect(() => {
@@ -161,9 +204,35 @@ export const DetailingActivitiesView: React.FC = () => {
     }
   }, [activeScript, readerLang]);
 
-  // Handle cross-screen navigation handoff (Dashboard, Products, Indications, Specialists, Dose Calc, Global Search)
+  // Handle cross-screen navigation handoff (Dashboard, Products, Indications, Specialists, Doctors, Today's Doctors)
   useEffect(() => {
     if (!prefillDetailing) return;
+
+    // 1. Dedicated Doctor-Specific Specialty & Group-Wise Detailing Flow
+    if (prefillDetailing.scopeToDoctorSpecialty) {
+      const deptFallback = prefillDetailing.departmentId
+        ? departmentMap.get(prefillDetailing.departmentId)?.Department_Name || ''
+        : '';
+      const resolvedSpecialty = String(prefillDetailing.specialist || deptFallback || '').trim();
+      setDoctorScope({
+        doctorId: prefillDetailing.doctorId,
+        doctorName: String(prefillDetailing.doctorName || 'Doctor').trim(),
+        specialty: resolvedSpecialty || 'General',
+        departmentId: prefillDetailing.departmentId,
+        returnTab: prefillDetailing.returnTab || 'team',
+      });
+      setSelectedProductGroup('ALL');
+      setScopeSearch('');
+      setSelectedGenericKey(null);
+      setSelectedScriptId(null);
+      setPrefillDetailing(null);
+      return;
+    }
+
+    // 2. Standard Direct Generic / Product Detailing Flow
+    setDoctorScope(null);
+    setSelectedProductGroup('ALL');
+    setScopeSearch('');
 
     let matchedGroup: GenericGroup | undefined;
 
@@ -201,7 +270,7 @@ export const DetailingActivitiesView: React.FC = () => {
     }
 
     setPrefillDetailing(null);
-  }, [prefillDetailing, genericGroups, setPrefillDetailing]);
+  }, [prefillDetailing, genericGroups, departmentMap, setPrefillDetailing]);
 
   // Keep selectedScriptId valid if scripts are edited/deleted
   useEffect(() => {
@@ -258,6 +327,160 @@ export const DetailingActivitiesView: React.FC = () => {
     loadMore: loadMoreGenerics,
     sentinelRef: genericsSentinelRef,
   } = useWindowedList(filteredGenericGroups, debouncedSearch, WINDOW_PAGE_SIZE);
+
+  // =========================================================================
+  // DOCTOR-SPECIFIC SPECIALTY & PRODUCT-GROUP FILTERING
+  // Strictly scoped to THAT doctor's Specialty via:
+  //   1) Departments.Preferred_Generics -> matched Drug International Products
+  //   2) Doctor_Product_Detailing.Specialist -> matched GenericGroups & Products
+  // =========================================================================
+  const specialtyScopedEntries = useMemo<SpecialtyScopedEntry[]>(() => {
+    if (!doctorScope) return [];
+
+    const matchedDepts = (dataset.Departments || []).filter((dept) => {
+      if (
+        doctorScope.departmentId &&
+        dept.Department_ID &&
+        dept.Department_ID.trim().toLowerCase() === doctorScope.departmentId.trim().toLowerCase()
+      ) {
+        return true;
+      }
+      return Boolean(
+        doctorScope.specialty && matchSpecialistName(dept.Department_Name, doctorScope.specialty)
+      );
+    });
+
+    const specialistTargets = Array.from(
+      new Set(
+        [doctorScope.specialty, ...matchedDepts.map((d) => d.Department_Name)]
+          .map((s) => String(s ?? '').trim())
+          .filter(Boolean)
+      )
+    );
+
+    const preferredGenerics: string[] = [];
+    const preferredKeys = new Set<string>();
+    for (const dept of matchedDepts) {
+      for (const gen of parsePreferredGenerics(dept.Preferred_Generics)) {
+        const k = normalizeGenericKey(gen);
+        if (k && !preferredKeys.has(k)) {
+          preferredKeys.add(k);
+          preferredGenerics.push(gen);
+        }
+      }
+    }
+
+    const entries: SpecialtyScopedEntry[] = [];
+
+    for (const group of genericGroups) {
+      const matchedSpecialistScript = group.scripts.find(
+        (s) =>
+          (doctorScope.doctorId && s.Doctor_ID && s.Doctor_ID === doctorScope.doctorId) ||
+          specialistTargets.some((target) => matchSpecialistName(s.Specialist, target))
+      );
+
+      let matchesPreferred = false;
+      if (preferredGenerics.length > 0) {
+        if (preferredKeys.has(group.key)) {
+          matchesPreferred = true;
+        } else if (
+          group.products.some((prod) =>
+            preferredGenerics.some((pref) => productMatchesPreferredGeneric(prod, pref))
+          )
+        ) {
+          matchesPreferred = true;
+        } else {
+          const syntheticProd = { Generic_Name: group.genericName } as Product;
+          matchesPreferred = preferredGenerics.some((pref) =>
+            productMatchesPreferredGeneric(syntheticProd, pref)
+          );
+        }
+      }
+
+      if (!matchedSpecialistScript && !matchesPreferred) continue;
+
+      const groupCodeSet = new Set<ProductGroupCode>();
+      const brandsByGroup = new Map<ProductGroupCode, string[]>();
+
+      for (const prod of group.products) {
+        const code = normalizeProductGroup(prod.Product_Group);
+        if (!code) continue;
+        groupCodeSet.add(code);
+        const brandLabel =
+          extractBrandBase(prod.Brand_Name || prod.Product_Name) ||
+          String(prod.Brand_Name || prod.Product_Name || '').trim();
+        if (brandLabel) {
+          const existing = brandsByGroup.get(code) || [];
+          if (!existing.some((b) => b.toLowerCase() === brandLabel.toLowerCase())) {
+            existing.push(brandLabel);
+            brandsByGroup.set(code, existing);
+          }
+        }
+      }
+
+      const groupCodes = PRODUCT_GROUP_CODES.filter((code) => groupCodeSet.has(code));
+
+      entries.push({
+        group,
+        groupCodes,
+        brandsByGroup,
+        preferredScriptId:
+          matchedSpecialistScript?.Detailing_ID || group.scripts[0]?.Detailing_ID || null,
+        hasSpecialtyScript: Boolean(matchedSpecialistScript),
+      });
+    }
+
+    return entries.sort((a, b) => {
+      if (a.group.products.length > 0 !== b.group.products.length > 0) {
+        return a.group.products.length > 0 ? -1 : 1;
+      }
+      if (a.hasSpecialtyScript !== b.hasSpecialtyScript) {
+        return a.hasSpecialtyScript ? -1 : 1;
+      }
+      return a.group.genericName.localeCompare(b.group.genericName);
+    });
+  }, [doctorScope, dataset.Departments, genericGroups]);
+
+  // Only show Product Groups (G-A, G-B, G-C, ...) that have >= 1 product for THIS specialty
+  const availableSpecialtyProductGroups = useMemo(() => {
+    const counts = new Map<ProductGroupCode, number>();
+    for (const entry of specialtyScopedEntries) {
+      for (const code of entry.groupCodes) {
+        counts.set(code, (counts.get(code) || 0) + 1);
+      }
+    }
+    return PRODUCT_GROUP_CODES.filter((code) => (counts.get(code) || 0) > 0).map((code) => ({
+      code,
+      count: counts.get(code) || 0,
+    }));
+  }, [specialtyScopedEntries]);
+
+  const debouncedScopeSearch = useDebouncedValue(scopeSearch, 120);
+
+  const filteredSpecialtyEntries = useMemo(() => {
+    const q = debouncedScopeSearch.trim().toLowerCase();
+    return specialtyScopedEntries.filter((entry) => {
+      if (selectedProductGroup !== 'ALL' && !entry.groupCodes.includes(selectedProductGroup)) {
+        return false;
+      }
+      if (!q) return true;
+      const haystack = [
+        entry.group.genericName,
+        ...entry.group.brandNames,
+        ...entry.group.products.map((p) => `${p.Brand_Name || p.Product_Name || ''} ${p.Strength || ''}`),
+        ...entry.groupCodes.map((c) => `g-${c} group ${c}`),
+      ]
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [specialtyScopedEntries, selectedProductGroup, debouncedScopeSearch]);
+
+  const handleSelectScopedEntry = useCallback((entry: SpecialtyScopedEntry) => {
+    setSelectedGenericKey(entry.group.key);
+    setSelectedScriptId(entry.preferredScriptId || entry.group.scripts[0]?.Detailing_ID || null);
+    setReaderLang('bn');
+  }, []);
 
   const handleSelectGeneric = useCallback((group: GenericGroup) => {
     setSelectedGenericKey(group.key);
@@ -615,6 +838,246 @@ export const DetailingActivitiesView: React.FC = () => {
               />
             </div>
           </article>
+        </div>
+      </div>
+    );
+  }
+
+  // =========================================================================
+  // 1B. SPECIALTY-SCOPED & GROUP-WISE DOCTOR DETAILING VIEW (Full-Screen)
+  // Triggered when tapping "Detailing" on any Doctor card in Team or Today's Doctors
+  // =========================================================================
+  if (doctorScope) {
+    return (
+      <div
+        role="region"
+        aria-label={`${doctorScope.doctorName} specialty detailing`}
+        className="fixed inset-0 z-[44] h-[100dvh] bg-[#F4F8FC] dark:bg-[#071522] flex flex-col overflow-hidden"
+      >
+        {/* Sticky Top Bar: ← Back + Doctor Name · Specialty */}
+        <header className="shrink-0 bg-white dark:bg-[#0B1E30] border-b border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 pt-safe">
+          <div className="max-w-4xl mx-auto w-full min-h-[54px] px-3 sm:px-5 py-1.5 flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={handleExitDoctorScope}
+              aria-label="Back to doctors list"
+              className="min-h-[40px] -ml-1.5 px-2.5 rounded-xl text-[#0D2B45] dark:text-white hover:bg-[#EAF4FB] dark:hover:bg-white/10 text-sm font-semibold inline-flex items-center gap-1 shrink-0 transition-colors active:scale-[0.97] cursor-pointer"
+            >
+              <ArrowLeft className="w-4 h-4 shrink-0" />
+              <span>Back</span>
+            </button>
+
+            <div className="min-w-0 flex-1 text-right sm:text-left">
+              <h1 className="truncate text-[14.5px] sm:text-base leading-snug">
+                <span className="font-display font-bold text-[#0D2B45] dark:text-white">
+                  {doctorScope.doctorName}
+                </span>
+                <span
+                  aria-hidden="true"
+                  className="mx-1.5 text-[#0D2B45]/35 dark:text-[#EBF4FA]/35 font-normal"
+                >
+                  ·
+                </span>
+                <span className="font-semibold text-[#0E7C7B] dark:text-[#22E3D0]">
+                  {doctorScope.specialty}
+                </span>
+              </h1>
+            </div>
+          </div>
+
+          {/* Horizontal Product Group Filter Bar (All, G-A, G-B, G-C, ... only groups with products) */}
+          <div className="max-w-4xl mx-auto w-full px-3.5 sm:px-5 pb-2.5 pt-0.5">
+            <div
+              role="tablist"
+              aria-label="Filter by product group"
+              className="flex items-center gap-1.5 overflow-x-auto no-scrollbar"
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={selectedProductGroup === 'ALL'}
+                onClick={() => setSelectedProductGroup('ALL')}
+                className={`shrink-0 min-h-[34px] px-3 rounded-full text-xs font-bold whitespace-nowrap transition-colors cursor-pointer ${
+                  selectedProductGroup === 'ALL'
+                    ? 'bg-[#0D2B45] dark:bg-[#0E7C7B] text-white'
+                    : 'bg-[#EAF4FB] dark:bg-[#10283E] text-[#0D2B45]/80 dark:text-[#EBF4FA]/80 hover:bg-[#dcecf7] dark:hover:bg-[#153552]'
+                }`}
+              >
+                All{' '}
+                <span className="font-mono tabular-nums text-[11px] opacity-85">
+                  ({specialtyScopedEntries.length})
+                </span>
+              </button>
+
+              {availableSpecialtyProductGroups.map(({ code, count }) => {
+                const active = selectedProductGroup === code;
+                return (
+                  <button
+                    key={code}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setSelectedProductGroup(code)}
+                    className={`shrink-0 min-h-[34px] px-3 rounded-full text-xs font-bold whitespace-nowrap transition-colors cursor-pointer ${
+                      active
+                        ? 'bg-[#0E7C7B] text-white'
+                        : 'bg-[#EAF4FB] dark:bg-[#10283E] text-[#0D2B45]/80 dark:text-[#EBF4FA]/80 hover:bg-[#dcecf7] dark:hover:bg-[#153552]'
+                    }`}
+                  >
+                    G-{code}{' '}
+                    <span className="font-mono tabular-nums text-[11px] opacity-85">({count})</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </header>
+
+        {/* Scrollable Specialty-Scoped Generics & DI Brands List */}
+        <div className="flex-1 min-h-0 overflow-y-auto">
+          <div className="max-w-4xl mx-auto w-full px-3.5 sm:px-5 py-3 pb-8 pb-safe space-y-2.5">
+            {/* Compact inline search within this specialty */}
+            {specialtyScopedEntries.length > 6 && (
+              <div className="relative">
+                <Search
+                  aria-hidden="true"
+                  className="w-4 h-4 text-[#0D2B45]/45 dark:text-[#EBF4FA]/45 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"
+                />
+                <input
+                  type="search"
+                  value={scopeSearch}
+                  onChange={(e) => setScopeSearch(e.target.value)}
+                  placeholder={`Search ${doctorScope.specialty} brands or generics...`}
+                  aria-label={`Search ${doctorScope.specialty} brands or generics`}
+                  className="w-full min-h-[40px] pl-9 pr-9 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/12 dark:border-[#EBF4FA]/12 text-sm text-[#0D2B45] dark:text-white placeholder:text-[#0D2B45]/45 dark:placeholder:text-[#EBF4FA]/45 focus:outline-none focus:border-[#0E7C7B]"
+                />
+                {scopeSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setScopeSearch('')}
+                    aria-label="Clear specialty detailing search"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 min-h-[36px] min-w-[36px] flex items-center justify-center rounded-lg text-[#0D2B45]/50 hover:text-[#0D2B45] dark:text-[#EBF4FA]/50 dark:hover:text-white cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            )}
+
+            {specialtyScopedEntries.length === 0 ? (
+              <div className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-8 text-center space-y-2.5">
+                <BookOpen className="w-8 h-8 text-[#0E7C7B] dark:text-[#22E3D0] mx-auto" />
+                <p className="font-display font-bold text-base text-[#0D2B45] dark:text-white">
+                  No detailing products mapped to {doctorScope.specialty}
+                </p>
+                <p className="text-xs sm:text-sm text-[#0D2B45]/60 dark:text-[#EBF4FA]/60 max-w-sm mx-auto">
+                  Check the doctor&apos;s Specialty or sync Departments &amp; Detailing data from Google Sheets.
+                </p>
+                <div className="pt-1 flex items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleExitDoctorScope}
+                    className="min-h-[40px] px-4 rounded-xl bg-[#EAF4FB] dark:bg-[#133859] text-[#0D2B45] dark:text-white text-xs font-semibold cursor-pointer"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDoctorScope(null);
+                      setSelectedProductGroup('ALL');
+                    }}
+                    className="min-h-[40px] px-4 rounded-xl bg-[#0E7C7B] text-white text-xs font-semibold cursor-pointer"
+                  >
+                    Browse All Detailing
+                  </button>
+                </div>
+              </div>
+            ) : filteredSpecialtyEntries.length === 0 ? (
+              <div className="rounded-2xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 p-8 text-center space-y-2">
+                <p className="font-display font-bold text-sm text-[#0D2B45] dark:text-white">
+                  No matching brands found
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setScopeSearch('');
+                    setSelectedProductGroup('ALL');
+                  }}
+                  className="min-h-[38px] px-4 rounded-xl bg-[#0E7C7B] text-white text-xs font-semibold cursor-pointer"
+                >
+                  Show All ({specialtyScopedEntries.length})
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                {filteredSpecialtyEntries.map((entry) => {
+                  const brandLabel =
+                    selectedProductGroup !== 'ALL' &&
+                    (entry.brandsByGroup.get(selectedProductGroup)?.length || 0) > 0
+                      ? entry.brandsByGroup.get(selectedProductGroup)!.join(', ')
+                      : getPrimaryBrandLabel(entry.group);
+                  const visibleGroupBadges =
+                    selectedProductGroup !== 'ALL'
+                      ? [selectedProductGroup]
+                      : entry.groupCodes.slice(0, 3);
+
+                  return (
+                    <button
+                      key={`scoped-${entry.group.key}`}
+                      type="button"
+                      onClick={() => handleSelectScopedEntry(entry)}
+                      className="w-full min-h-[54px] px-3.5 py-2.5 rounded-xl bg-white dark:bg-[#0D2235] border border-[#0D2B45]/10 dark:border-[#EBF4FA]/10 hover:border-[#0E7C7B]/55 dark:hover:border-[#149A99]/60 flex items-center justify-between gap-2.5 text-left transition-colors active:scale-[0.99] focus-visible:outline-2 focus-visible:outline-[#0E7C7B] cursor-pointer"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[14.5px] leading-snug">
+                          <span className="font-display font-bold text-[#0D2B45] dark:text-white">
+                            {entry.group.genericName}
+                          </span>
+                          {brandLabel && (
+                            <>
+                              <span
+                                aria-hidden="true"
+                                className="mx-1.5 text-[#0D2B45]/35 dark:text-[#EBF4FA]/35 font-normal"
+                              >
+                                ·
+                              </span>
+                              <span className="font-semibold text-[#0E7C7B] dark:text-[#22E3D0]">
+                                {brandLabel}
+                              </span>
+                            </>
+                          )}
+                        </div>
+
+                        {visibleGroupBadges.length > 0 && (
+                          <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                            {visibleGroupBadges.map((code) => (
+                              <span
+                                key={`${entry.group.key}-g-${code}`}
+                                className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-[#EBF4FA] dark:bg-[#102E47] text-[10.5px] font-mono font-bold text-[#0D2B45] dark:text-[#7CE0DF] leading-none"
+                              >
+                                G-{code}
+                              </span>
+                            ))}
+                            {selectedProductGroup === 'ALL' && entry.groupCodes.length > 3 && (
+                              <span className="text-[10.5px] font-mono text-[#0D2B45]/50 dark:text-[#EBF4FA]/50">
+                                +{entry.groupCodes.length - 3}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <ChevronRight
+                        aria-hidden="true"
+                        className="w-4 h-4 text-[#0D2B45]/40 dark:text-[#EBF4FA]/40 shrink-0"
+                      />
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     );

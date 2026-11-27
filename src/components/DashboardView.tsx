@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import {
   Activity,
   ArrowRight,
@@ -6,6 +6,7 @@ import {
   BookOpen,
   Building2,
   Calculator,
+  Calendar,
   Check,
   ChevronRight,
   CloudOff,
@@ -20,6 +21,7 @@ import {
   Users,
 } from 'lucide-react';
 import { useApp, TeamWorkspaceSubTab } from '../context/AppContext';
+import { filterDoctorsAvailableToday } from '../services/api';
 import { GlobalSearchBar } from './GlobalSearchBar';
 import { MEDMENTOR_YOUTUBE_URL, YouTubePlayIcon } from './MedMentorBrand';
 
@@ -242,10 +244,12 @@ const StethoscopeMottoFooter: React.FC = () => (
 
 export const DashboardView: React.FC = () => {
   const {
+    dataset,
     isApiConfigured,
     isSuperAdmin,
     currentUser,
     teamSession,
+    effectiveTeamId,
     pendingInvites,
     isOnline,
     isSyncing,
@@ -261,6 +265,19 @@ export const DashboardView: React.FC = () => {
 
   const isTeamAuthenticated = Boolean(currentUser || teamSession);
 
+  const todaysDoctorsCount = useMemo(() => {
+    if (!teamSession) return 0;
+    const teamPrivateDoctors =
+      teamSession.loginMode === 'firebase'
+        ? effectiveTeamId
+          ? dataset.Doctors
+          : []
+        : teamSession.areaId && teamSession.areaId !== 'ALL'
+        ? dataset.Doctors.filter((d) => d.Area_ID === teamSession.areaId)
+        : dataset.Doctors;
+    return filterDoctorsAvailableToday(teamPrivateDoctors, dataset.Chambers).length;
+  }, [dataset.Doctors, dataset.Chambers, teamSession, effectiveTeamId]);
+
   const navigateTo = (
     tab:
       | 'products'
@@ -269,6 +286,7 @@ export const DashboardView: React.FC = () => {
       | 'dose-calculator'
       | 'knowledge'
       | 'team'
+      | 'todays-doctors'
       | 'settings'
   ) => {
     if (tab === 'specialists') {
@@ -598,12 +616,42 @@ export const DashboardView: React.FC = () => {
           </div>
         </button>
 
-        {/* Stacked Row 3: Compact 4-Column Team Shortcut Row when logged in; Sign-In Card when signed out */}
+        {/* Stacked Row 3: Today's Doctors Pill + Compact 4-Column Team Shortcut Row when logged in; Sign-In Card when signed out */}
         {isTeamAuthenticated ? (
-          <div
-            aria-label="Private Team Workspace shortcuts"
-            className="grid grid-cols-4 gap-1.5 sm:gap-2"
-          >
+          <div className="space-y-2">
+            {/* Compact "আজকের ডাক্তার (Today's Doctors)" Pill */}
+            <button
+              type="button"
+              onClick={() => navigateTo('todays-doctors')}
+              aria-label={`আজকের ডাক্তার (Today's Doctors) — ${todaysDoctorsCount} জন`}
+              className="group w-full min-h-[46px] sm:min-h-[50px] rounded-2xl bg-white dark:bg-[#0D2235] border border-teal-500/25 dark:border-teal-400/25 hover:border-[#0E7C7B] shadow-[0_5px_14px_rgba(10,40,75,0.07)] dark:shadow-black/25 px-3 sm:px-3.5 py-2 flex items-center justify-between gap-2 text-left transition-all duration-150 active:scale-[0.97] focus-visible:outline-2 focus-visible:outline-[#0E7C7B] cursor-pointer"
+            >
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                <span className="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-gradient-to-br from-[#14B8A6] to-[#0E7C7B] text-white flex items-center justify-center shrink-0 shadow-sm">
+                  <Calendar className="w-4 h-4" />
+                </span>
+                <div className="min-w-0 truncate text-[13px] sm:text-sm leading-tight">
+                  <span className="font-display font-bold text-[#0D2B45] dark:text-white">
+                    আজকের ডাক্তার
+                  </span>{' '}
+                  <span className="text-[11.5px] sm:text-xs font-medium text-[#0D2B45]/60 dark:text-[#EBF4FA]/65">
+                    (Today&apos;s Doctors)
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-[#E6FBF3] dark:bg-[#0C2E2B] text-[#0E7C7B] dark:text-[#22E3D0] text-[11.5px] font-bold tabular-nums whitespace-nowrap">
+                  {todaysDoctorsCount} জন
+                </span>
+                <ArrowRight className="w-4 h-4 text-[#0E7C7B] dark:text-[#22E3D0] transition-transform duration-150 group-hover:translate-x-0.5" />
+              </div>
+            </button>
+
+            <div
+              aria-label="Private Team Workspace shortcuts"
+              className="grid grid-cols-4 gap-1.5 sm:gap-2"
+            >
             {(
               [
                 {
@@ -660,6 +708,7 @@ export const DashboardView: React.FC = () => {
                 </button>
               );
             })}
+            </div>
           </div>
         ) : (
           <button
